@@ -32,8 +32,12 @@ DerivedData/
 *.tfstate.backup
 *.tfvars
 
-# 生成物 (地域パッケージ等)
+# 生成物 (地域パッケージ等) と入力データ (OSM 抽出版・DEM キャッシュ)
 /pipeline/out/
+/pipeline/data/
 /server/subscriber
 /server/fanout
 /pipeline/build-package
+
+# Stop フックの残骸 (フック設定はセッション再起動で消える)
+/report/

@@ -25,8 +25,10 @@ server-test: ## server/ のテストを実行
 server-lint: ## server/ を golangci-lint でチェック
 	cd server && golangci-lint run ./...
 
-pipeline-run: ## 地域パッケージ生成を実行
-	cd pipeline && go run ./cmd/build-package
+# 例: make pipeline-run MESH=584177 (data/mesh-<MESH>.osm を osmium で切り出しておくこと)
+MESH ?= 584177
+pipeline-run: ## 地域パッケージ生成を実行 (MESH=2次メッシュコード)
+	cd pipeline && go run ./cmd/build-package -mesh $(MESH) -osm data/mesh-$(MESH).osm -out out -dem-cache data/dem-cache
 
 pipeline-test: ## pipeline/ のテストを実行
 	cd pipeline && go test ./...

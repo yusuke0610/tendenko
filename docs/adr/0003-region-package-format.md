@@ -68,6 +68,21 @@ FR-12 の帰結として、**コスト関数を前処理で焼き込む方式 (O
 - 沿岸メッシュは千数百個規模になる見込みで、manifest と GCS レイアウトの設計が必要 (パイプライン実装時)
 - 道路グラフは OSM の派生データベースであり、**公開配布時の ODbL share-alike 義務の整理が未決のまま残る** — [ADR-0002](0002-oss-licensing.md) / [docs/licenses.md](../licenses.md) で追跡
 
+## 検証記録 (2026-07-18 垂直スライス実測)
+
+実在の 2 メッシュで region.sqlite を end-to-end 生成した (OSM 東北抽出版 + 地理院 DEM10B、pipeline/cmd/build-package)。
+
+| メッシュ | 地域 | ノード | エッジ | region.sqlite | 生成時間* |
+|---|---|---|---|---|---|
+| 584177 | 釜石市中心部 (沿岸・地方) | 8,397 | 8,729 | **0.9 MB** | 3.5 秒 |
+| 574036 | 仙台市中心部 (都市・高密度) | 61,198 | 70,061 | **7.4 MB** | 8.1 秒 |
+
+*生成時間の大半は DEM タイル初回取得 (ネットワーク)。キャッシュ後は 1 秒未満。osmium のメッシュ切り出しは東北全域 291MB からで約 3 秒。
+
+**結論: 道路グラフは NFR-04 (150MB) に対して支配項ではない** (都市部最悪級でも 1 桁 MB)。パッケージサイズの支配項は地図タイル (MBTiles) になる。
+
+**未完了**: MBTiles の実測は nixpkgs の tilemaker 3.1.0 が macOS/arm64 でクラッシュするため保留。本番パイプラインは Cloud Run jobs (Linux) で動かすため、Linux 環境での実測が必要。浸水域フラグ (A40) と避難場所 (shelters) の取り込みも未実装。
+
 ## 帰結
 
 - pipeline/cmd/build-package は「対象メッシュ列挙 → osmium 抽出 → グラフ構築 + DEM/浸水域焼き込み → region.sqlite + tiles.mbtiles + manifest 生成 → GCS」の構成になる

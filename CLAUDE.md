@@ -30,6 +30,6 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 
 ## 次セッションの最優先タスク
 
-1. **pipeline の垂直スライス** — 実在の沿岸 2 次メッシュ 1 個で region.sqlite + MBTiles を end-to-end 生成し、サイズと生成時間を実測する (ADR-0003 の「正直な弱点」の検証)
-2. **app/ の GraphLoader + EvacuationRouter** — SQLite → 隣接リスト展開と A* (動的コスト) をドメイン層 TDD で実装。NFR-03 (5 秒) のベンチマークも早期に書く
+1. **app/ の GraphLoader + EvacuationRouter** — SQLite → 隣接リスト展開と A* (動的コスト) をドメイン層 TDD で実装。NFR-03 (5 秒) のベンチマークも早期に書く。region.sqlite の実物は `make pipeline-run` で生成できる (ADR-0003 の検証記録参照)
+2. **pipeline の残り** — 浸水域フラグ (国土数値情報 A40)、避難場所 (shelters テーブル)、MBTiles (nixpkgs tilemaker は macOS/arm64 でクラッシュ → Linux で実測)
 3. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)

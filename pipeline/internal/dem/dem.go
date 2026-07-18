@@ -15,14 +15,15 @@ import (
 )
 
 const (
-	zoom     = 14 // DEM10B の最大ズーム
-	tileSize = 256
-	baseURL  = "https://cyberjapandata.gsi.go.jp/xyz/dem/%d/%d/%d.txt"
+	zoom           = 14 // DEM10B の最大ズーム
+	tileSize       = 256
+	defaultBaseURL = "https://cyberjapandata.gsi.go.jp/xyz/dem"
 )
 
 // Client は標高タイルの取得とルックアップを行う。
 type Client struct {
 	CacheDir string
+	BaseURL  string // テスト用に差し替え可能
 	HTTP     *http.Client
 
 	tiles map[[2]int]*tile // key: {x, y}
@@ -36,6 +37,7 @@ type tile struct {
 func NewClient(cacheDir string) *Client {
 	return &Client{
 		CacheDir: cacheDir,
+		BaseURL:  defaultBaseURL,
 		HTTP:     &http.Client{Timeout: 30 * time.Second},
 		tiles:    map[[2]int]*tile{},
 	}
@@ -91,7 +93,7 @@ func (c *Client) fetch(x, y int) ([]byte, error) {
 		}
 		return b, nil
 	}
-	url := fmt.Sprintf(baseURL, zoom, x, y)
+	url := fmt.Sprintf("%s/%d/%d/%d.txt", c.BaseURL, zoom, x, y)
 	resp, err := c.HTTP.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("dem: %s: %w", url, err)

@@ -46,7 +46,9 @@ func Parse(r io.Reader, keepWay func(tags map[string]string) bool) (map[int64]No
 				return nil, nil, err
 			}
 			nodes[n.ID] = n
-			dec.Skip()
+			if err := dec.Skip(); err != nil {
+				return nil, nil, fmt.Errorf("osmxml: node %d: %w", n.ID, err)
+			}
 		case "way":
 			w, err := parseWay(dec, se)
 			if err != nil {
@@ -56,7 +58,9 @@ func Parse(r io.Reader, keepWay func(tags map[string]string) bool) (map[int64]No
 				ways = append(ways, w)
 			}
 		case "relation":
-			dec.Skip()
+			if err := dec.Skip(); err != nil {
+				return nil, nil, fmt.Errorf("osmxml: relation: %w", err)
+			}
 		}
 	}
 	return nodes, ways, nil
@@ -122,7 +126,9 @@ func parseWay(dec *xml.Decoder, start xml.StartElement) (Way, error) {
 				}
 				w.Tags[k] = v
 			}
-			dec.Skip()
+			if err := dec.Skip(); err != nil {
+				return w, fmt.Errorf("osmxml: way %d: %w", w.ID, err)
+			}
 		case xml.EndElement:
 			if t.Name.Local == "way" {
 				return w, nil

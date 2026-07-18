@@ -1,0 +1,56 @@
+# CI — 実行内容は Makefile を正本とし、ここでは make ターゲットを呼ぶだけにする (CLAUDE.md)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (server + pipeline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pipeline/go.mod
+          cache-dependency-path: pipeline/go.sum
+      - name: Test (server)
+        run: make server-test
+      - name: Test (pipeline)
+        run: make pipeline-test
+      - name: gofmt
+        run: |
+          files=$(gofmt -l server pipeline)
+          if [ -n "$files" ]; then echo "gofmt が必要: $files"; exit 1; fi
+      - name: golangci-lint (server)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          working-directory: server
+      - name: golangci-lint (pipeline)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          working-directory: pipeline
+
+  domain:
+    name: iOS ドメイン層 (swift test)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test (TendenkoDomain)
+        run: make domain-test
+
+  app:
+    name: iOS アプリビルド
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build (iOS Simulator)
+        run: make app-build

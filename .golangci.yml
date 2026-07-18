@@ -1,0 +1,12 @@
+# server/ と pipeline/ の両モジュールに適用される (golangci-lint は上位ディレクトリの設定を探す)
+version: "2"
+linters:
+  settings:
+    errcheck:
+      # 慣例的に defer で呼び、失敗しても対処のない close/rollback は除外する
+      exclude-functions:
+        - (*os.File).Close
+        - (io.ReadCloser).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Stmt).Close

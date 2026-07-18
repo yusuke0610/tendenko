@@ -33,7 +33,7 @@ DerivedData/
 *.tfvars
 
 # 生成物 (地域パッケージ等) と入力データ (OSM 抽出版・DEM キャッシュ)
-/pipeline/out/
+/pipeline/out*/
 /pipeline/data/
 /server/subscriber
 /server/fanout

@@ -26,7 +26,8 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 - **app/ にサーバー・インフラへの依存を持ち込まない**。サーバー側の都合 (API 形状、インフラ構成) がドメイン層に漏れない境界を維持する
 - コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/ja/) (`feat:`, `fix:`, `docs:`, `chore:` 等)
 - **`git push` は毎回ユーザーの明示的な承認を得てから行う**。過去に承認されていても次回に持ち越さない (コミットはローカルなので承認不要)
-- Go コードは `make fmt` (gofmt) と `make server-lint` (golangci-lint) を通すこと
+- Go コードは `make fmt` (gofmt) と golangci-lint (設定はリポジトリ直下の `.golangci.yml`) を通すこと
+- CI (GitHub Actions, `.github/workflows/ci.yml`) は make ターゲットを呼ぶだけの薄いラッパーに保つ。テスト・ビルド手順を workflow に直接書かない
 
 ## 次セッションの最優先タスク
 

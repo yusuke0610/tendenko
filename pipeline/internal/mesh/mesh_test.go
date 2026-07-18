@@ -36,6 +36,30 @@ func TestParseSecondaryInvalid(t *testing.T) {
 	}
 }
 
+func TestExpand(t *testing.T) {
+	// 1 メッシュを ring=1 で拡張すると 3×3 = 9 メッシュ
+	got, err := Expand(map[string]bool{"584177": true}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 9 {
+		t.Fatalf("len = %d, want 9: %v", len(got), got)
+	}
+	// 東隣・北隣は 1 次メッシュ境界を越えて繰り上がる (v=7→0 で u+1、q=7→0 で p+1)
+	for _, want := range []string{"584177", "584270", "584167", "594107"} {
+		if !got[want] {
+			t.Errorf("expanded set should contain %s", want)
+		}
+	}
+}
+
+func TestExpandRingZero(t *testing.T) {
+	got, err := Expand(map[string]bool{"584177": true}, 0)
+	if err != nil || len(got) != 1 || !got["584177"] {
+		t.Errorf("ring=0 should be identity: %v (err=%v)", got, err)
+	}
+}
+
 func TestSecondaryCodeRoundTrip(t *testing.T) {
 	// 釜石市中心部が 584177 に入ること
 	if got := SecondaryCode(39.2758, 141.8850); got != "584177" {

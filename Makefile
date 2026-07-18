@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup server-run server-test server-lint pipeline-run pipeline-test \
+.PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
         app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
@@ -25,9 +25,14 @@ server-test: ## server/ のテストを実行
 server-lint: ## server/ を golangci-lint でチェック
 	cd server && golangci-lint run ./...
 
-# 例: make pipeline-run MESH=584177 (data/mesh-<MESH>.osm を osmium で切り出しておくこと)
+# 一括: PBF に置いた OSM データの海岸線メッシュを全生成 (全国は japan-latest.osm.pbf を指定)
+PBF ?= pipeline/data/japan-latest.osm.pbf
+pipeline-run: ## 地域パッケージを一括生成 (PBF=OSM pbf パス。沿岸メッシュ自動列挙 + manifest)
+	cd pipeline && go run ./cmd/build-package -pbf $(abspath $(PBF)) -out out -dem-cache data/dem-cache
+
+# 単一メッシュ (デバッグ用): make pipeline-run-one MESH=584177 (data/mesh-<MESH>.osm を切り出しておく)
 MESH ?= 584177
-pipeline-run: ## 地域パッケージ生成を実行 (MESH=2次メッシュコード)
+pipeline-run-one: ## 単一メッシュの地域パッケージを生成 (MESH=2次メッシュコード)
 	cd pipeline && go run ./cmd/build-package -mesh $(MESH) -osm data/mesh-$(MESH).osm -out out -dem-cache data/dem-cache
 
 pipeline-test: ## pipeline/ のテストを実行

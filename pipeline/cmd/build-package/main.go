@@ -1,29 +1,39 @@
-// build-package は OSM・浸水想定ポリゴン・指定緊急避難場所・DEM から
-// オフライン用の地域パッケージを生成する。日次〜週次バッチ。
-// 分割単位は 2 次メッシュ (沿岸のみ)、出力は region-<meshcode>.sqlite + tiles-<meshcode>.mbtiles (ADR-0003)。
-// NFR-04: 1 地域パッケージ < 150MB / 同梱最小データセット < 50MB。
+// build-package は OSM・DEM から地域パッケージ (region.sqlite) を生成する。
+// 分割単位は 2 次メッシュ、対象は沿岸メッシュのみ (ADR-0003)。
 //
-// 現状は垂直スライス: メッシュ切り出し済みの .osm (XML) から region.sqlite を生成する。
-// 使い方:
+// 一括モード (全国 pbf でも地方抽出版でも同じ):
 //
-//	osmium extract -b <bbox> tohoku.pbf -o mesh.osm
-//	go run ./cmd/build-package -mesh 584177 -osm mesh.osm -out out/
+//	go run ./cmd/build-package -pbf data/japan-latest.osm.pbf -out out
+//
+// OSM の海岸線 (natural=coastline) を含むメッシュ + 隣接 -buffer リングを列挙し、
+// osmium で一括切り出し → 各メッシュの region.sqlite と manifest.json を生成する。
+// osmium が PATH に必要 (nix develop 内で実行する)。
+//
+// 単一モード (デバッグ用):
+//
+//	osmium extract -b <bbox> data/tohoku-latest.osm.pbf -o data/mesh-584177.osm
+//	go run ./cmd/build-package -mesh 584177 -osm data/mesh-584177.osm -out out
 //
 // TODO:
-//   - 対象メッシュ列挙 (浸水想定区域と交差 or 海岸線バッファ内の 2 次メッシュ) と osmium 呼び出しの内製化
 //   - 浸水想定区域 (国土数値情報 A40) の交差判定 → FlagInundation 付与
 //   - 指定緊急避難場所 (国土地理院) → shelters テーブル
-//   - tilemaker で MBTiles 生成
-//   - manifest (JSON) 生成 → GCS アップロード (バージョン・ハッシュ・生成日時で差分 DL を支える)
+//   - tilemaker で MBTiles 生成 (macOS/arm64 の nixpkgs ビルドがクラッシュするため Linux で)
+//   - GCS アップロード
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/yusuke0610/tendenko/pipeline/internal/dem"
@@ -33,63 +43,248 @@ import (
 	"github.com/yusuke0610/tendenko/pipeline/internal/pkgwriter"
 )
 
+const sourceNote = "OSM (Geofabrik) + 地理院標高タイル DEM10B"
+
 func main() {
 	var (
-		meshCode = flag.String("mesh", "", "2 次メッシュコード (例: 584177)")
-		osmPath  = flag.String("osm", "", "メッシュ切り出し済み .osm (XML) のパス")
+		pbfPath  = flag.String("pbf", "", "一括モード: OSM pbf (全国版または地方抽出版)")
+		meshCode = flag.String("mesh", "", "単一モード: 2 次メッシュコード (例: 584177)")
+		osmPath  = flag.String("osm", "", "単一モード: メッシュ切り出し済み .osm (XML)")
 		outDir   = flag.String("out", "out", "出力ディレクトリ")
 		demCache = flag.String("dem-cache", "data/dem-cache", "地理院標高タイルのキャッシュディレクトリ")
 		skipDEM  = flag.Bool("skip-dem", false, "標高取得をスキップする (オフライン動作確認用)")
+		buffer   = flag.Int("buffer", 1, "一括モード: 海岸線メッシュに加える隣接リング数 (1 ≈ 10km)")
 	)
 	flag.Parse()
-	if *meshCode == "" || *osmPath == "" {
+	if err := os.MkdirAll(*outDir, 0o755); err != nil {
+		log.Fatal(err)
+	}
+
+	switch {
+	case *pbfPath != "":
+		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM); err != nil {
+			log.Fatal(err)
+		}
+	case *meshCode != "" && *osmPath != "":
+		if _, err := mesh.ParseSecondary(*meshCode); err != nil {
+			log.Fatal(err)
+		}
+		r, err := buildOne(*meshCode, *osmPath, *outDir, *demCache, *skipDEM, true)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("\n%s  %.1f MB\n", filepath.Join(*outDir, r.File), float64(r.Bytes)/1024/1024)
+	default:
 		flag.Usage()
 		os.Exit(2)
 	}
-	if _, err := mesh.ParseSecondary(*meshCode); err != nil {
-		log.Fatal(err)
+}
+
+// ---- 一括モード ----
+
+type manifestEntry struct {
+	Mesh   string `json:"mesh"`
+	File   string `json:"file"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+	Nodes  int    `json:"nodes"`
+	Edges  int    `json:"edges"`
+}
+
+type manifest struct {
+	SchemaVersion int             `json:"schema_version"`
+	GeneratedAt   string          `json:"generated_at"`
+	Source        string          `json:"source"`
+	Packages      []manifestEntry `json:"packages"`
+}
+
+func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool) error {
+	start := time.Now()
+	tmp, err := os.MkdirTemp("", "tendenko-build-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+
+	// 1. 海岸線を含むメッシュを列挙し、隣接リングでバッファする
+	coastOSM := filepath.Join(tmp, "coast.osm")
+	if err := osmium("tags-filter", pbfPath, "w/natural=coastline", "-o", coastOSM, "--overwrite"); err != nil {
+		return err
+	}
+	coastal, err := coastalMeshes(coastOSM)
+	if err != nil {
+		return err
+	}
+	target, err := mesh.Expand(coastal, buffer)
+	if err != nil {
+		return err
+	}
+	codes := make([]string, 0, len(target))
+	for c := range target {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	fmt.Printf("coastline meshes=%d → +buffer(%d)=%d  (%.1fs)\n",
+		len(coastal), buffer, len(codes), time.Since(start).Seconds())
+
+	// 2. osmium で一括切り出し (1 パスあたり 50 メッシュ)
+	extractStart := time.Now()
+	if err := extractAll(pbfPath, codes, tmp); err != nil {
+		return err
+	}
+	fmt.Printf("extract done (%.1fs)\n", time.Since(extractStart).Seconds())
+
+	// 3. 各メッシュを生成。歩行可能な道路が無いメッシュ (海上など) はスキップ
+	var entries []manifestEntry
+	skipped := 0
+	for i, code := range codes {
+		r, err := buildOne(code, filepath.Join(tmp, "mesh-"+code+".osm"), outDir, demCache, skipDEM, false)
+		if err != nil {
+			return fmt.Errorf("mesh %s: %w", code, err)
+		}
+		if r == nil {
+			skipped++
+			continue
+		}
+		entries = append(entries, *r)
+		fmt.Printf("[%d/%d] %s nodes=%d edges=%d %.1fMB\n",
+			i+1, len(codes), code, r.Nodes, r.Edges, float64(r.Bytes)/1024/1024)
 	}
 
+	// 4. manifest.json (FR-06 の差分 DL 用: バージョン・ハッシュ・生成日時)
+	m := manifest{
+		SchemaVersion: 1,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Source:        sourceNote,
+		Packages:      entries,
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "manifest.json"), b, 0o644); err != nil {
+		return err
+	}
+
+	var total int64
+	for _, e := range entries {
+		total += e.Bytes
+	}
+	fmt.Printf("\npackages=%d skipped(empty)=%d total=%.1fMB elapsed=%.0fs\n",
+		len(entries), skipped, float64(total)/1024/1024, time.Since(start).Seconds())
+	return nil
+}
+
+// coastalMeshes は natural=coastline のノードが属する 2 次メッシュを列挙する。
+func coastalMeshes(coastOSM string) (map[string]bool, error) {
+	f, err := os.Open(coastOSM)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	nodes, _, err := osmxml.Parse(f, func(map[string]string) bool { return false })
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool)
+	for _, n := range nodes {
+		set[mesh.SecondaryCode(n.Lat, n.Lon)] = true
+	}
+	return set, nil
+}
+
+// extractAll は osmium extract の config ファイルを使い、50 メッシュずつ切り出す。
+func extractAll(pbfPath string, codes []string, dir string) error {
+	const batchSize = 50
+	for i := 0; i < len(codes); i += batchSize {
+		batch := codes[i:min(i+batchSize, len(codes))]
+		type extract struct {
+			Output string     `json:"output"`
+			BBox   [4]float64 `json:"bbox"`
+		}
+		cfg := struct {
+			Directory string    `json:"directory"`
+			Extracts  []extract `json:"extracts"`
+		}{Directory: dir}
+		for _, code := range batch {
+			bbox, err := mesh.ParseSecondary(code)
+			if err != nil {
+				return err
+			}
+			cfg.Extracts = append(cfg.Extracts, extract{
+				Output: "mesh-" + code + ".osm",
+				BBox:   [4]float64{bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat},
+			})
+		}
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		cfgPath := filepath.Join(dir, "extracts.json")
+		if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
+			return err
+		}
+		if err := osmium("extract", "-c", cfgPath, pbfPath, "--overwrite"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func osmium(args ...string) error {
+	cmd := exec.Command("osmium", args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("osmium %v: %w", args[:1], err)
+	}
+	return nil
+}
+
+// ---- 単一メッシュの生成 ----
+
+// buildOne は 1 メッシュの region.sqlite を生成する。歩行可能な道路が無ければ nil を返す。
+func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool) (*manifestEntry, error) {
 	start := time.Now()
 	stage := func(name string, from time.Time) time.Time {
 		now := time.Now()
-		fmt.Printf("%-12s %8.2fs\n", name, now.Sub(from).Seconds())
+		if verbose {
+			fmt.Printf("%-12s %8.2fs\n", name, now.Sub(from).Seconds())
+		}
 		return now
 	}
 
-	f, err := os.Open(*osmPath)
+	f, err := os.Open(osmPath)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	defer f.Close()
 	allNodes, ways, err := osmxml.Parse(f, graph.Walkable)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	t := stage("parse", start)
-	fmt.Printf("  nodes(all)=%d walkable-ways=%d\n", len(allNodes), len(ways))
 
 	nodes, edges := graph.Build(allNodes, ways)
 	t = stage("graph", t)
-	fmt.Printf("  nodes(used)=%d edges=%d\n", len(nodes), len(edges))
+	if len(edges) == 0 {
+		return nil, nil
+	}
 
-	elev := map[int64]float64{} // 値なし = NaN 扱い
-	if !*skipDEM {
-		client := dem.NewClient(*demCache)
-		missing := 0
+	elev := map[int64]float64{}
+	if !skipDEM {
+		// クライアントをメッシュごとに作り直してメモリ上のタイル保持を抑える
+		// (ディスクキャッシュは demCache で共有され、隣接メッシュの再取得はネットワークに出ない)
+		client := dem.NewClient(demCache)
 		for id, n := range nodes {
 			v, ok, err := client.Elevation(n.Lat, n.Lon)
 			if err != nil {
-				log.Fatal(err)
+				return nil, err
 			}
 			if ok {
 				elev[id] = v
-			} else {
-				missing++
 			}
 		}
 		t = stage("dem", t)
-		fmt.Printf("  elevations=%d missing=%d\n", len(elev), missing)
 	}
 
 	nodeRows := make([]pkgwriter.NodeRow, 0, len(nodes))
@@ -114,20 +309,38 @@ func main() {
 		})
 	}
 
-	if err := os.MkdirAll(*outDir, 0o755); err != nil {
-		log.Fatal(err)
+	file := "region-" + meshCode + ".sqlite"
+	outPath := filepath.Join(outDir, file)
+	_ = os.Remove(outPath) // pkgwriter.Write は既存ファイルに追記できないため消してから作る
+	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows); err != nil {
+		return nil, err
 	}
-	outPath := filepath.Join(*outDir, "region-"+*meshCode+".sqlite")
-	os.Remove(outPath)
-	if err := pkgwriter.Write(outPath, *meshCode, "OSM (Geofabrik) + 地理院標高タイル DEM10B", nodeRows, edgeRows); err != nil {
-		log.Fatal(err)
-	}
-	t = stage("sqlite", t)
+	stage("sqlite", t)
 	stage("total", start)
 
 	info, err := os.Stat(outPath)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	fmt.Printf("\n%s  %.1f MB\n", outPath, float64(info.Size())/1024/1024)
+	sum, err := fileSHA256(outPath)
+	if err != nil {
+		return nil, err
+	}
+	return &manifestEntry{
+		Mesh: meshCode, File: file, Bytes: info.Size(), SHA256: sum,
+		Nodes: len(nodeRows), Edges: len(edgeRows),
+	}, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

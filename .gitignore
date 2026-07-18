@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+
+# Nix
+result
+result-*
+
+# direnv
+.direnv/
+
+# Go
+*.test
+*.out
+/server/bin/
+/pipeline/bin/
+
+# Swift / Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# OpenTofu
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# 生成物 (地域パッケージ等)
+/pipeline/out/
+/server/subscriber
+/server/fanout
+/pipeline/build-package

@@ -14,14 +14,21 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 - 新しい ADR は `make docs-adr` で連番作成する (template.md をコピー)
 - 第三者がデューデリジェンスできる品質を維持する。決定の背景・選択肢・トレードオフを省略しない
 
+## app/ の構成
+
+- **Xcode プロジェクトの正本は `app/project.yml`** (XcodeGen)。`Tendenko.xcodeproj` は生成物でありコミットしない。ターゲット・依存・設定の変更は project.yml を編集して `make app-generate`
+- ドメイン層は `app/TendenkoDomain/` のローカル Swift Package。macOS でもビルドできるため `make domain-test` でシミュレータなしに高速にテストが回る — TDD はまずここで
+- UI 層 (`app/Tendenko/`) は SwiftUI + MapLibre Native (SPM)。アプリターゲットのテストは `make app-test` (要 iOS シミュレータランタイム: `xcodebuild -downloadPlatform iOS`)
+
 ## コード規約
 
 - **app/ のドメイン層は純粋関数 + TDD**。経路探索・案内文生成などのロジックは副作用を持たない関数として書き、テストを先に書く
 - **app/ にサーバー・インフラへの依存を持ち込まない**。サーバー側の都合 (API 形状、インフラ構成) がドメイン層に漏れない境界を維持する
 - コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/ja/) (`feat:`, `fix:`, `docs:`, `chore:` 等)
+- **`git push` は毎回ユーザーの明示的な承認を得てから行う**。過去に承認されていても次回に持ち越さない (コミットはローカルなので承認不要)
 - Go コードは `make fmt` (gofmt) と `make server-lint` (golangci-lint) を通すこと
 
 ## 次セッションの最優先タスク
 
 1. **データパイプライン設計** — 地域分割単位・道路グラフフォーマットを ADR-0003 として決定する
-2. **Xcode プロジェクトの生成** — app/ ディレクトリの立ち上げ (SwiftUI + MapLibre Native、ドメイン層の TDD 基盤)
+2. app/ の地図表示 (MapLibre) とオフラインタイル読み込みの実装 (ADR-0003 のタイル形式決定後)

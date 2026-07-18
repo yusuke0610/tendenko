@@ -15,6 +15,8 @@ result-*
 /pipeline/bin/
 
 # Swift / Xcode
+# Tendenko.xcodeproj は XcodeGen の生成物 (正本は app/project.yml)
+/app/Tendenko.xcodeproj
 *.xcuserstate
 xcuserdata/
 DerivedData/

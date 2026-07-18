@@ -20,6 +20,9 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            # iOS (Xcode 本体は Nix 管理外。プロジェクト生成のみ Nix 提供)
+            xcodegen
+
             # Go (server/, pipeline/)
             go # 1.23+
             gopls

@@ -3,7 +3,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-test \
-        app-build app-test infra-plan infra-apply docs-adr fmt
+        app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -31,11 +31,19 @@ pipeline-run: ## 地域パッケージ生成を実行
 pipeline-test: ## pipeline/ のテストを実行
 	cd pipeline && go test ./...
 
-app-build: ## iOS アプリをビルド (TODO: Xcode プロジェクト生成後に実装)
-	@echo "TODO: app/ の Xcode プロジェクト生成後に xcodebuild ラッパーを実装する"
+app-generate: ## Xcode プロジェクトを project.yml から生成 (XcodeGen)
+	cd app && xcodegen generate
 
-app-test: ## iOS アプリのテストを実行 (TODO: Xcode プロジェクト生成後に実装)
-	@echo "TODO: app/ の Xcode プロジェクト生成後に xcodebuild test ラッパーを実装する"
+app-build: app-generate ## iOS アプリをシミュレータ向けにビルド (署名なし)
+	cd app && xcodebuild -project Tendenko.xcodeproj -scheme Tendenko \
+		-destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
+
+domain-test: ## ドメイン層のテストを実行 (シミュレータ不要・高速。TDD はまずこれ)
+	cd app/TendenkoDomain && swift test
+
+app-test: app-generate domain-test ## ドメイン層 + アプリターゲットのテストを実行 (要 iOS シミュレータランタイム)
+	cd app && xcodebuild -project Tendenko.xcodeproj -scheme Tendenko \
+		-destination 'platform=iOS Simulator,name=iPhone 17' test CODE_SIGNING_ALLOWED=NO
 
 infra-plan: ## OpenTofu の plan を実行
 	cd infra && tofu plan

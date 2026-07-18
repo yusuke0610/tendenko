@@ -5,6 +5,7 @@ package dem
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -94,27 +95,9 @@ func (c *Client) fetch(x, y int) ([]byte, error) {
 		return b, nil
 	}
 	url := fmt.Sprintf("%s/%d/%d/%d.txt", c.BaseURL, zoom, x, y)
-	resp, err := c.HTTP.Get(url)
+	body, err := c.get(url)
 	if err != nil {
-		return nil, fmt.Errorf("dem: %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-	var body []byte
-	switch resp.StatusCode {
-	case http.StatusOK:
-		body = make([]byte, 0, 256*1024)
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := resp.Body.Read(buf)
-			body = append(body, buf[:n]...)
-			if err != nil {
-				break
-			}
-		}
-	case http.StatusNotFound:
-		body = nil
-	default:
-		return nil, fmt.Errorf("dem: %s: HTTP %d", url, resp.StatusCode)
+		return nil, err
 	}
 	if err := os.MkdirAll(c.CacheDir, 0o755); err != nil {
 		return nil, err
@@ -123,6 +106,39 @@ func (c *Client) fetch(x, y int) ([]byte, error) {
 		return nil, err
 	}
 	return body, nil
+}
+
+// get はタイルを取得する。一時的なネットワークエラー・5xx は指数バックオフでリトライし、
+// 404 (海域などタイルなし) は nil を返す。長時間バッチが 1 回の切断で死なないための要 (実測で発生)。
+func (c *Client) get(url string) ([]byte, error) {
+	const attempts = 4
+	var lastErr error
+	for i := range attempts {
+		if i > 0 {
+			time.Sleep(time.Duration(1<<(i-1)) * time.Second) // 1s, 2s, 4s
+		}
+		resp, err := c.HTTP.Get(url)
+		if err != nil {
+			lastErr = fmt.Errorf("dem: %s: %w", url, err)
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == http.StatusOK && err == nil:
+			return body, nil
+		case resp.StatusCode == http.StatusNotFound:
+			return nil, nil
+		case err != nil:
+			lastErr = fmt.Errorf("dem: %s: read body: %w", url, err)
+		default:
+			lastErr = fmt.Errorf("dem: %s: HTTP %d", url, resp.StatusCode)
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				return nil, lastErr // 4xx はリトライしない
+			}
+		}
+	}
+	return nil, lastErr
 }
 
 func parseTile(raw []byte) *tile {

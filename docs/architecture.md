@@ -53,7 +53,7 @@ flowchart TB
 ### pipeline/ (Go + GDAL/osmium/tilemaker)
 
 - `cmd/build-package` — OSM・浸水想定ポリゴン・指定緊急避難場所・DEM から地域パッケージ (< 150MB/地域、NFR-04) を生成し GCS へ配置
-- 地域分割単位・道路グラフフォーマットは **ADR-0003 で決定予定 (未決)**
+- 分割単位は **2 次メッシュ (沿岸のみ)**、道路グラフは **SQLite + 地図タイルは MBTiles** ([ADR-0003](adr/0003-region-package-format.md))
 
 ### infra/ (OpenTofu)
 

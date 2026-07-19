@@ -1,4 +1,8 @@
 # tendenko — 実行方法の正本。コマンドはここに集約し、ドキュメントからは make <target> を参照する。
+#
+# 全レシピは nix develop (flake.nix の devShell) の中で実行される。
+# 分岐 (nix シェル内なら二重起動しない / nix 不在の CI では素通し) は scripts/nix-bash.sh 側。
+SHELL := ./scripts/nix-bash.sh
 
 .DEFAULT_GOAL := help
 
@@ -9,10 +13,7 @@ help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-setup: ## 初回セットアップ (nix develop 内であることを検証し、git hooks を設定)
-	@if [ -z "$$IN_NIX_SHELL" ]; then \
-		echo "error: nix develop (または direnv) のシェル内で実行してください"; exit 1; \
-	fi
+setup: ## 初回セットアップ (git hooks 等。nix develop は自動で適用される)
 	@git config core.hooksPath .githooks 2>/dev/null || true
 	@echo "setup done"
 

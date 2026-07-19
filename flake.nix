@@ -40,17 +40,25 @@
             sqlite
             jq
             git-cliff
-            nixfmt-rfc-style
+            nixfmt
           ];
 
           # Swift/Xcode は Nix で管理しない (macOS の Xcode 前提)。
-          # ここでは存在確認と警告のみ行う。
+          # nix develop は PATH を置き換えるため、Xcode の swift/xcodebuild (/usr/bin) を
+          # 後ろに追加して見えるようにする。存在しなければ警告のみ。
+          # Makefile が全レシピをこのシェル経由で実行するため、正常時は無音にしておく。
           shellHook = ''
-            echo "tendenko dev shell (go $(go version | cut -d' ' -f3))"
-            if command -v xcodebuild >/dev/null 2>&1; then
-              echo "Xcode: $(xcodebuild -version 2>/dev/null | head -n1)"
+            export PATH="$PATH:/usr/bin:/bin:/usr/sbin:/sbin"
+            # nix の apple-sdk が DEVELOPER_DIR/SDKROOT を nix 側に向けるため、
+            # /usr/bin/swift や xcodebuild が壊れる。実際の Xcode に戻す。
+            # xcode-select -p は DEVELOPER_DIR を優先して返すため、外して問い合わせる
+            if [ -x /usr/bin/xcode-select ] && dir="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p 2>/dev/null)"; then
+              export DEVELOPER_DIR="$dir"
+              # nix stdenv がエクスポートするツールチェーン変数を xcodebuild が拾うと
+              # nix の ld でリンクして失敗する。Xcode のツールチェーンに任せる。
+              unset SDKROOT CC CXX LD AR AS NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
             else
-              echo "warning: xcodebuild が見つかりません。iOS アプリのビルドには Xcode が必要です。" >&2
+              echo "warning: Xcode が見つかりません。iOS アプリのビルドには Xcode が必要です。" >&2
             fi
           '';
         };

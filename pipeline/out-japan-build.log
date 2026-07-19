@@ -1,0 +1,5 @@
+[0mdirenv: loading ~/develop/tendenko/.envrc
+[0mdirenv: using flake
+[0mdirenv: nix-direnv: Using cached dev shell
+tendenko dev shell (go go1.26.4)
+Xcode: 

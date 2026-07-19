@@ -44,6 +44,21 @@ func SecondaryCode(lat, lon float64) string {
 	return fmt.Sprintf("%02d%02d%d%d", p, u, q, v)
 }
 
+// ParsePrimary は 1 次メッシュコード (例: "5841") を範囲に変換する。
+func ParsePrimary(code string) (BBox, error) {
+	if len(code) != 4 {
+		return BBox{}, fmt.Errorf("mesh: invalid primary mesh code %q", code)
+	}
+	p, err1 := strconv.Atoi(code[:2])
+	u, err2 := strconv.Atoi(code[2:])
+	if err1 != nil || err2 != nil {
+		return BBox{}, fmt.Errorf("mesh: invalid primary mesh code %q", code)
+	}
+	minLat := float64(p) * 2 / 3
+	minLon := 100 + float64(u)
+	return BBox{MinLat: minLat, MinLon: minLon, MaxLat: minLat + 2.0/3, MaxLon: minLon + 1}, nil
+}
+
 // indices は 2 次メッシュコードを南北・東西の連番に変換する (隣接計算用)。
 func indices(code string) (latIdx, lonIdx int, err error) {
 	m := code2Pattern.FindStringSubmatch(code)

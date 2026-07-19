@@ -36,6 +36,30 @@ func TestParseSecondaryInvalid(t *testing.T) {
 	}
 }
 
+func TestParsePrimary(t *testing.T) {
+	bbox, err := ParsePrimary("5841")
+	if err != nil {
+		t.Fatal(err)
+	}
+	almost := func(got, want float64) bool { return math.Abs(got-want) < 1e-9 }
+	if !almost(bbox.MinLat, 38.0+2.0/3) || !almost(bbox.MinLon, 141) ||
+		!almost(bbox.MaxLat, 39.0+1.0/3) || !almost(bbox.MaxLon, 142) {
+		t.Errorf("bbox = %+v", bbox)
+	}
+	// 2 次メッシュ 584177 は 1 次メッシュ 5841 に含まれる (浮動小数点の丸め分は許容)
+	const eps = 1e-9
+	sec, _ := ParseSecondary("584177")
+	if sec.MinLat < bbox.MinLat-eps || sec.MaxLat > bbox.MaxLat+eps ||
+		sec.MinLon < bbox.MinLon-eps || sec.MaxLon > bbox.MaxLon+eps {
+		t.Error("584177 should be inside 5841")
+	}
+	for _, c := range []string{"", "58a1", "58417"} {
+		if _, err := ParsePrimary(c); err == nil {
+			t.Errorf("ParsePrimary(%q) should fail", c)
+		}
+	}
+}
+
 func TestExpand(t *testing.T) {
 	// 1 メッシュを ring=1 で拡張すると 3×3 = 9 メッシュ
 	got, err := Expand(map[string]bool{"584177": true}, 1)

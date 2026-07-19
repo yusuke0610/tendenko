@@ -193,42 +193,86 @@ func coastalMeshes(coastOSM string) (map[string]bool, error) {
 	return set, nil
 }
 
-// extractAll は osmium extract の config ファイルを使い、50 メッシュずつ切り出す。
+// extractAll は 2 段階で切り出す。全国 pbf (2.3GB) を 2 次メッシュごとに直接切り出すと
+// パス数 × 全読みで遅く、抽出数を増やすとメモリで死ぬ (全国 4,481 メッシュで実測 OOM kill)。
+// そこで親の 1 次メッシュ (80km 四方、全国の沿岸で 100 個規模) 単位でまず切り出し、
+// 小さくなった各 1 次メッシュ pbf から配下の 2 次メッシュを展開する。
 func extractAll(pbfPath string, codes []string, dir string) error {
-	const batchSize = 50
-	for i := 0; i < len(codes); i += batchSize {
-		batch := codes[i:min(i+batchSize, len(codes))]
-		type extract struct {
-			Output string     `json:"output"`
-			BBox   [4]float64 `json:"bbox"`
+	byParent := map[string][]string{}
+	for _, c := range codes {
+		byParent[c[:4]] = append(byParent[c[:4]], c)
+	}
+	parents := make([]string, 0, len(byParent))
+	for p := range byParent {
+		parents = append(parents, p)
+	}
+	sort.Strings(parents)
+
+	// レベル 1: 1 次メッシュを 20 個ずつ切り出す (pbf 出力)
+	const parentBatch = 20
+	passes := (len(parents) + parentBatch - 1) / parentBatch
+	for i := 0; i < len(parents); i += parentBatch {
+		batch := parents[i:min(i+parentBatch, len(parents))]
+		var extracts []extractCfg
+		for _, p := range batch {
+			bbox, err := mesh.ParsePrimary(p)
+			if err != nil {
+				return err
+			}
+			extracts = append(extracts, extractCfg{
+				Output: "parent-" + p + ".osm.pbf",
+				BBox:   [4]float64{bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat},
+			})
 		}
-		cfg := struct {
-			Directory string    `json:"directory"`
-			Extracts  []extract `json:"extracts"`
-		}{Directory: dir}
-		for _, code := range batch {
+		start := time.Now()
+		if err := osmiumExtract(pbfPath, dir, extracts); err != nil {
+			return err
+		}
+		fmt.Printf("extract L1 pass %d/%d (%d parents) %.0fs\n",
+			i/parentBatch+1, passes, len(batch), time.Since(start).Seconds())
+	}
+
+	// レベル 2: 各 1 次メッシュ pbf から配下の 2 次メッシュを展開 (XML 出力)
+	for _, p := range parents {
+		parentPBF := filepath.Join(dir, "parent-"+p+".osm.pbf")
+		var extracts []extractCfg
+		for _, code := range byParent[p] {
 			bbox, err := mesh.ParseSecondary(code)
 			if err != nil {
 				return err
 			}
-			cfg.Extracts = append(cfg.Extracts, extract{
+			extracts = append(extracts, extractCfg{
 				Output: "mesh-" + code + ".osm",
 				BBox:   [4]float64{bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat},
 			})
 		}
-		b, err := json.Marshal(cfg)
-		if err != nil {
+		if err := osmiumExtract(parentPBF, dir, extracts); err != nil {
 			return err
 		}
-		cfgPath := filepath.Join(dir, "extracts.json")
-		if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
-			return err
-		}
-		if err := osmium("extract", "-c", cfgPath, pbfPath, "--overwrite"); err != nil {
-			return err
-		}
+		_ = os.Remove(parentPBF) // ディスク節約
 	}
 	return nil
+}
+
+type extractCfg struct {
+	Output string     `json:"output"`
+	BBox   [4]float64 `json:"bbox"`
+}
+
+func osmiumExtract(inputPath, dir string, extracts []extractCfg) error {
+	cfg := struct {
+		Directory string       `json:"directory"`
+		Extracts  []extractCfg `json:"extracts"`
+	}{Directory: dir, Extracts: extracts}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	cfgPath := filepath.Join(dir, "extracts.json")
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
+		return err
+	}
+	return osmium("extract", "-c", cfgPath, inputPath, "--overwrite")
 }
 
 func osmium(args ...string) error {

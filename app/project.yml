@@ -25,6 +25,9 @@ targets:
     sources: [Tendenko]
     dependencies:
       - package: TendenkoDomain
+        product: TendenkoDomain
+      - package: TendenkoDomain
+        product: TendenkoStorage
       - package: MapLibre
     settings:
       base:

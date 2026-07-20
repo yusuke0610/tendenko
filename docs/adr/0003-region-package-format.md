@@ -169,6 +169,18 @@ macOS/arm64 での nixpkgs tilemaker クラッシュが実行環境固有の問�
 
 MBTiles を含めても NFR-04 (150MB) への影響は無視できる (仙台中心部で region.sqlite 7.4MB + tiles 2.8MB = 10.2MB)。全国 2,515 パッケージへの本番適用 (Cloud Run jobs) は次のインフラ構築セッションで行う。
 
+### 追記 (2026-07-20): app/ でのオフライン地図表示を実装・実機確認
+
+MapLibre Native が MBTiles をネットワーク越しに取得する前提の設計であることを踏まえ、TendenkoStorage に **ローカル HTTP サーバー方式**で組み込んだ。
+
+- `MBTilesReader`: MBTiles 仕様の `tile_row` が TMS 方式 (南→北) で、XYZ 方式 (北→南、地図ライブラリの標準) と Y が反転していることを吸収する。GRDB でクエリするだけの薄い読み出し層
+- `MBTilesServer`: `Network.framework` の `NWListener` で 127.0.0.1 上に最小 HTTP サーバーを立て、`/{z}/{x}/{y}.pbf` へのリクエストを `MBTilesReader` に橋渡しする。**通信は一切発生しない完全ローカルな実装**。MapLibre のスタイル JSON にはこのサーバーの URL (`http://127.0.0.1:<port>/{z}/{x}/{y}.pbf`) を vector source として渡す
+- `MapView` (SwiftUI): `MLNMapView` (MapLibre Native) を `UIViewRepresentable` でラップ
+
+**ハマりどころ (実機検証で発覚)**: tilemaker が生成する MBTiles の `tile_data` は **gzip 圧縮されたまま**格納されている (マジックバイト `1F 8B` で確認)。ローカルサーバーが `Content-Encoding: gzip` ヘッダを付けずに生バイト列を返すと、MapLibre 側はエラーを出さずに圧縮バイト列をそのまま MVT protobuf として解釈しようとし、**地物 0 件の空タイルとして静かに失敗する** — スタイルの背景色だけが表示され、道路や水域が一切描画されない状態になり、原因の切り分けに時間がかかった (ネットワークログでは 200 OK で正常にタイル取得できているように見えるため、一見データ取得の問題に見えない)。`MBTilesServer.isGzip` でマジックバイトを検出し、該当時のみ `Content-Encoding: gzip` を付与することで解決。URLSession 側の透過的な解凍に任せている
+
+**動作確認 (iOS シミュレータ実機)**: 釜石メッシュ (584177) の実データ (region.sqlite + tiles-584177.mbtiles、パイプラインで生成した実物) をアプリにバンドルし、iPhone 17 シミュレータで起動 → スクリーンショットで実際の道路網・海岸線の描画を確認した。開発用の一時的な同梱データであり、本来は FR-02 (地域パッケージの自動ダウンロード) で取得する — 未実装
+
 ## 帰結
 
 - pipeline/cmd/build-package は「対象メッシュ列挙 → osmium 抽出 → グラフ構築 + DEM/浸水域焼き込み → region.sqlite + tiles.mbtiles + manifest 生成 → GCS」の構成になる

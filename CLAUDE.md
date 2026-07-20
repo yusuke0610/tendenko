@@ -32,6 +32,7 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 
 ## 次セッションの最優先タスク
 
-1. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)。テスト用 MBTiles は `pipeline/out/tiles-584177.mbtiles` に実物がある
-2. 全国 2,515 パッケージへの MBTiles 本番適用 (Cloud Run jobs で `-tiles` 付きの `make pipeline-run`。ローカル macOS では tilemaker が動かないため要 Linux 環境、ADR-0003 参照)
-3. **東京都・福井県・香川県の津波浸水想定区域データの補完** — 国の A40 データセットに存在しない (ADR-0003 参照)。都道府県独自のハザードマップ公開状況を調査する
+1. **FR-02 (地域パッケージの自動ダウンロード)** — 現在 ContentView は開発用に釜石メッシュ (584177) の region.sqlite/MBTiles をアプリに直接同梱しているだけ (`app/Tendenko/Resources/`)。これを GCS からのダウンロード + ローリングキャッシュに置き換える
+2. 経路の可視化 — EvacuationRouter の結果を MapView 上に線として描画する。avoid-inundation の可視化 (浸水フラグ付きエッジの色分け) も
+3. 全国 2,515 パッケージへの MBTiles 本番適用 (Cloud Run jobs で `-tiles` 付きの `make pipeline-run`。ローカル macOS では tilemaker が動かないため要 Linux 環境、ADR-0003 参照)
+4. **東京都・福井県・香川県の津波浸水想定区域データの補完** — 国の A40 データセットに存在しない (ADR-0003 参照)。都道府県独自のハザードマップ公開状況を調査する

@@ -114,8 +114,24 @@ GraphLoader (GRDB) + EvacuationRouter (ターン抑制付き Dijkstra、動的�
 
 **「SQLite + メモリ展開」で NFR-03 (< 5 秒) に 1 桁の余裕**があり、自前バイナリ形式の再検討は不要と判断。実機 (iPhone) と 3×3 結合での再計測は app 実装時に行う。
 
+### 追記 (2026-07-20): 浸水想定区域フラグ・避難場所テーブルの実装
+
+FlagInundation の付与と shelters テーブルの実装を行った。実データ (国土数値情報 A40・国土地理院の指定緊急避難場所) の**取得元 URL はまだ確認していない** — ダウンロード URL を推測で使わない方針のため、次のいずれかをユーザーに確認してから着手する: (a) 具体的な配布 URL、(b) 既にローカルにある元データファイル。
+
+そこで pipeline は**正規化 GeoJSON を受け取る形**で実装した。実データ取得後は ogr2ogr 等で以下の形式に変換するだけで使える。
+
+- `internal/inundation`: Polygon/MultiPolygon の FeatureCollection (座標は GeoJSON 標準の `[lon, lat]`)。穴 (内水面など) は内側リングとして表現でき、外周とのレイキャストを XOR することで正しく除外する
+- `internal/shelterdata`: Point の FeatureCollection、`properties.tsunami == true` の地物のみ採用 (FR-04 の「災害種別: 津波」)。`properties.name` を避難場所名とする
+
+`build-package` に `-inundation <path>` `-shelters <path>` を追加 (両方省略可。省略時は従来どおり FlagInundation なし・shelters 空)。
+
+**交差判定の設計判断**: エッジ (2 次メッシュ内の短い道路区間) の両端点+中点をポリゴンに対してテストする近似方式にした。完全な線分-多角形交差判定 (Sutherland–Hodgman 等) は実装コストに対して、この用途 (エッジは短く、浸水域は広い連続領域) ではオーバースペックと判断。ポリゴン数が多くなる想定 (全国の A40 データ) に備え、ポリゴンごとの bbox 前置フィルタを Index に持たせている。
+
+**動作確認**: 釜石メッシュ (584177, 8,397 ノード) に合成の浸水ポリゴンと避難場所 (圏外 1 件を含む) を与えて実行。8,729 エッジ中 1,381 エッジに FlagInundation が付与され、圏外の避難場所は shelters テーブルから正しく除外されることを確認した。
+
 ## 帰結
 
 - pipeline/cmd/build-package は「対象メッシュ列挙 → osmium 抽出 → グラフ構築 + DEM/浸水域焼き込み → region.sqlite + tiles.mbtiles + manifest 生成 → GCS」の構成になる
-- 次の実装: **1 メッシュを end-to-end で生成する垂直スライス** (実在の沿岸メッシュ 1 個で region.sqlite を作り、サイズと生成時間を実測する)
-- app 側は GraphLoader (SQLite → 隣接リスト) と EvacuationRouter (A* + 動的コスト) をドメイン層 TDD で実装する
+- 次の実装: **1 メッシュを end-to-end で生成する垂直スライス** (実在の沿岸メッシュ 1 個で region.sqlite を作り、サイズと生成時間を実測する) — 完了 (2026-07-18 の追記参照)
+- app 側は GraphLoader (SQLite → 隣接リスト) と EvacuationRouter (A* + 動的コスト) をドメイン層 TDD で実装する — 完了 (2026-07-19 の追記参照)
+- **未解決**: 浸水想定区域 (国土数値情報 A40) と指定緊急避難場所 (国土地理院) の実データ取得元。次セッションでユーザーに確認する

@@ -16,7 +16,11 @@ func TestWrite(t *testing.T) {
 	edges := []EdgeRow{
 		{From: 1, To: 2, LengthM: 1500, Grade: 0.02, BearingDeg: 45, Flags: 5},
 	}
-	if err := Write(path, "584177", "test-source", nodes, edges); err != nil {
+	shelters := []ShelterRow{
+		{Name: "釜石中学校", Lat: 39.2758, Lon: 141.885, ElevM: 20.0},
+		{Name: "標高不明の避難所", Lat: 39.26, Lon: 141.89, ElevM: math.NaN()},
+	}
+	if err := Write(path, "584177", "test-source", nodes, edges, shelters); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,14 +59,25 @@ func TestWrite(t *testing.T) {
 			t.Errorf("index %s missing (err=%v)", idx, err)
 		}
 	}
+
+	if err := db.QueryRow("SELECT COUNT(*) FROM shelters").Scan(&n); err != nil || n != 2 {
+		t.Errorf("shelters = %d (err=%v), want 2", n, err)
+	}
+	var name string
+	if err := db.QueryRow("SELECT name FROM shelters WHERE lat = 39.2758").Scan(&name); err != nil || name != "釜石中学校" {
+		t.Errorf("shelter name = %q (err=%v), want 釜石中学校", name, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM shelters WHERE elev_m IS NULL").Scan(&n); err != nil || n != 1 {
+		t.Errorf("NULL elev shelters = %d (err=%v), want 1", n, err)
+	}
 }
 
 func TestWriteRefusesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "region.sqlite")
-	if err := Write(path, "584177", "s", nil, nil); err != nil {
+	if err := Write(path, "584177", "s", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(path, "584177", "s", nil, nil); err == nil {
+	if err := Write(path, "584177", "s", nil, nil, nil); err == nil {
 		t.Error("second Write to same path should fail (schema already exists)")
 	}
 }

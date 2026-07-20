@@ -14,9 +14,12 @@
 //	osmium extract -b <bbox> data/tohoku-latest.osm.pbf -o data/mesh-584177.osm
 //	go run ./cmd/build-package -mesh 584177 -osm data/mesh-584177.osm -out out
 //
+// 浸水想定区域 (-inundation) と避難場所 (-shelters) は、正規化 GeoJSON を受け取る
+// (internal/inundation, internal/shelterdata のドキュメント参照)。実データの取得元
+// (国土数値情報 A40・国土地理院) は URL 未確認のため ADR-0003 に TODO として残している。
+//
 // TODO:
-//   - 浸水想定区域 (国土数値情報 A40) の交差判定 → FlagInundation 付与
-//   - 指定緊急避難場所 (国土地理院) → shelters テーブル
+//   - 浸水想定区域・避難場所の実データ取得元 URL の確認と、正規化 GeoJSON への変換 ETL
 //   - tilemaker で MBTiles 生成 (macOS/arm64 の nixpkgs ビルドがクラッシュするため Linux で)
 //   - GCS アップロード
 package main
@@ -38,9 +41,11 @@ import (
 
 	"github.com/yusuke0610/tendenko/pipeline/internal/dem"
 	"github.com/yusuke0610/tendenko/pipeline/internal/graph"
+	"github.com/yusuke0610/tendenko/pipeline/internal/inundation"
 	"github.com/yusuke0610/tendenko/pipeline/internal/mesh"
 	"github.com/yusuke0610/tendenko/pipeline/internal/osmxml"
 	"github.com/yusuke0610/tendenko/pipeline/internal/pkgwriter"
+	"github.com/yusuke0610/tendenko/pipeline/internal/shelterdata"
 )
 
 const sourceNote = "OSM (Geofabrik) + 地理院標高タイル DEM10B"
@@ -54,22 +59,41 @@ func main() {
 		demCache = flag.String("dem-cache", "data/dem-cache", "地理院標高タイルのキャッシュディレクトリ")
 		skipDEM  = flag.Bool("skip-dem", false, "標高取得をスキップする (オフライン動作確認用)")
 		buffer   = flag.Int("buffer", 1, "一括モード: 海岸線メッシュに加える隣接リング数 (1 ≈ 10km)")
+		inunPath = flag.String("inundation", "", "浸水想定区域の正規化 GeoJSON (省略時は FlagInundation を付与しない)")
+		shelPath = flag.String("shelters", "", "避難場所の正規化 GeoJSON (省略時は shelters テーブルを空にする)")
 	)
 	flag.Parse()
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
 
+	var inunIdx *inundation.Index
+	if *inunPath != "" {
+		polys, err := inundation.Load(*inunPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		inunIdx = inundation.NewIndex(polys)
+	}
+	var allShelters []shelterdata.Shelter
+	if *shelPath != "" {
+		s, err := shelterdata.Load(*shelPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		allShelters = s
+	}
+
 	switch {
 	case *pbfPath != "":
-		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM); err != nil {
+		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM, inunIdx, allShelters); err != nil {
 			log.Fatal(err)
 		}
 	case *meshCode != "" && *osmPath != "":
 		if _, err := mesh.ParseSecondary(*meshCode); err != nil {
 			log.Fatal(err)
 		}
-		r, err := buildOne(*meshCode, *osmPath, *outDir, *demCache, *skipDEM, true)
+		r, err := buildOne(*meshCode, *osmPath, *outDir, *demCache, *skipDEM, true, inunIdx, allShelters)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -83,12 +107,13 @@ func main() {
 // ---- 一括モード ----
 
 type manifestEntry struct {
-	Mesh   string `json:"mesh"`
-	File   string `json:"file"`
-	Bytes  int64  `json:"bytes"`
-	SHA256 string `json:"sha256"`
-	Nodes  int    `json:"nodes"`
-	Edges  int    `json:"edges"`
+	Mesh     string `json:"mesh"`
+	File     string `json:"file"`
+	Bytes    int64  `json:"bytes"`
+	SHA256   string `json:"sha256"`
+	Nodes    int    `json:"nodes"`
+	Edges    int    `json:"edges"`
+	Shelters int    `json:"shelters"`
 }
 
 type manifest struct {
@@ -98,7 +123,8 @@ type manifest struct {
 	Packages      []manifestEntry `json:"packages"`
 }
 
-func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool) error {
+func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
+	inunIdx *inundation.Index, allShelters []shelterdata.Shelter) error {
 	start := time.Now()
 	tmp, err := os.MkdirTemp("", "tendenko-build-*")
 	if err != nil {
@@ -138,7 +164,8 @@ func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool) error 
 	var entries []manifestEntry
 	skipped := 0
 	for i, code := range codes {
-		r, err := buildOne(code, filepath.Join(tmp, "mesh-"+code+".osm"), outDir, demCache, skipDEM, false)
+		r, err := buildOne(code, filepath.Join(tmp, "mesh-"+code+".osm"), outDir, demCache, skipDEM, false,
+			inunIdx, allShelters)
 		if err != nil {
 			return fmt.Errorf("mesh %s: %w", code, err)
 		}
@@ -287,7 +314,10 @@ func osmium(args ...string) error {
 // ---- 単一メッシュの生成 ----
 
 // buildOne は 1 メッシュの region.sqlite を生成する。歩行可能な道路が無ければ nil を返す。
-func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool) (*manifestEntry, error) {
+// inunIdx が nil なら浸水フラグを付与しない。allShelters は全域分の避難場所を渡し、
+// メッシュ範囲内のものだけをここでフィルタする (呼び出し側では読み込みを 1 回に留める)。
+func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool,
+	inunIdx *inundation.Index, allShelters []shelterdata.Shelter) (*manifestEntry, error) {
 	start := time.Now()
 	stage := func(name string, from time.Time) time.Time {
 		now := time.Now()
@@ -295,6 +325,11 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool)
 			fmt.Printf("%-12s %8.2fs\n", name, now.Sub(from).Seconds())
 		}
 		return now
+	}
+
+	bbox, err := mesh.ParseSecondary(meshCode)
+	if err != nil {
+		return nil, err
 	}
 
 	f, err := os.Open(osmPath)
@@ -314,11 +349,25 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool)
 		return nil, nil
 	}
 
-	elev := map[int64]float64{}
+	// 浸水想定区域との交差判定 (FR-12)。inunIdx が nil (実データ未指定) ならスキップ。
+	if inunIdx != nil {
+		for i := range edges {
+			a, b := nodes[edges[i].From], nodes[edges[i].To]
+			if inunIdx.Intersects(a.Lat, a.Lon, b.Lat, b.Lon) {
+				edges[i].Flags |= graph.FlagInundation
+			}
+		}
+		t = stage("inundation", t)
+	}
+
+	var client *dem.Client
 	if !skipDEM {
 		// クライアントをメッシュごとに作り直してメモリ上のタイル保持を抑える
 		// (ディスクキャッシュは demCache で共有され、隣接メッシュの再取得はネットワークに出ない)
-		client := dem.NewClient(demCache)
+		client = dem.NewClient(demCache)
+	}
+	elev := map[int64]float64{}
+	if client != nil {
 		for id, n := range nodes {
 			v, ok, err := client.Elevation(n.Lat, n.Lon)
 			if err != nil {
@@ -353,10 +402,23 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool)
 		})
 	}
 
+	shelterRows := make([]pkgwriter.ShelterRow, 0)
+	for _, s := range shelterdata.InBBox(allShelters, bbox) {
+		elevM := math.NaN()
+		if client != nil {
+			if v, ok, err := client.Elevation(s.Lat, s.Lon); err != nil {
+				return nil, err
+			} else if ok {
+				elevM = v
+			}
+		}
+		shelterRows = append(shelterRows, pkgwriter.ShelterRow{Name: s.Name, Lat: s.Lat, Lon: s.Lon, ElevM: elevM})
+	}
+
 	file := "region-" + meshCode + ".sqlite"
 	outPath := filepath.Join(outDir, file)
 	_ = os.Remove(outPath) // pkgwriter.Write は既存ファイルに追記できないため消してから作る
-	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows); err != nil {
+	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows, shelterRows); err != nil {
 		return nil, err
 	}
 	stage("sqlite", t)
@@ -372,7 +434,7 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool)
 	}
 	return &manifestEntry{
 		Mesh: meshCode, File: file, Bytes: info.Size(), SHA256: sum,
-		Nodes: len(nodeRows), Edges: len(edgeRows),
+		Nodes: len(nodeRows), Edges: len(edgeRows), Shelters: len(shelterRows),
 	}, nil
 }
 

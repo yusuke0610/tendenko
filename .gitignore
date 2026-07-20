@@ -41,3 +41,6 @@ DerivedData/
 
 # Stop フックの残骸 (フック設定はセッション再起動で消える)
 /report/
+
+# バッチ実行ログ (手元の作業ログ、コミット対象外)
+/pipeline/out-japan-build.log

@@ -24,6 +24,12 @@ type EdgeRow struct {
 	Flags      uint32
 }
 
+type ShelterRow struct {
+	Name     string
+	Lat, Lon float64
+	ElevM    float64 // NaN = データなし → NULL
+}
+
 const schema = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE nodes (
@@ -41,7 +47,7 @@ CREATE TABLE edges (
   bearing_deg REAL NOT NULL,
   flags INTEGER NOT NULL
 );
--- 指定緊急避難場所 (災害種別: 津波)。TODO: 国土地理院データの取り込み
+-- 指定緊急避難場所 (災害種別: 津波)。shelterdata パッケージが読み込む。
 CREATE TABLE shelters (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -52,7 +58,7 @@ CREATE TABLE shelters (
 `
 
 // Write は region.sqlite を新規作成する。既存ファイルがあれば失敗する。
-func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow) error {
+func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow, shelters []ShelterRow) error {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=rwc&_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)")
 	if err != nil {
 		return err
@@ -90,6 +96,20 @@ func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow) 
 	for _, e := range edges {
 		if _, err := insEdge.Exec(e.From, e.To, e.LengthM, e.Grade, e.BearingDeg, e.Flags); err != nil {
 			return fmt.Errorf("pkgwriter: edge %d→%d: %w", e.From, e.To, err)
+		}
+	}
+
+	insShelter, err := tx.Prepare("INSERT INTO shelters (name, lat, lon, elev_m) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	for _, s := range shelters {
+		elev := any(s.ElevM)
+		if math.IsNaN(s.ElevM) {
+			elev = nil
+		}
+		if _, err := insShelter.Exec(s.Name, s.Lat, s.Lon, elev); err != nil {
+			return fmt.Errorf("pkgwriter: shelter %q: %w", s.Name, err)
 		}
 	}
 

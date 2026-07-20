@@ -32,6 +32,6 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 
 ## 次セッションの最優先タスク
 
-1. **全国パッケージの再生成** — 浸水想定区域・避難場所の実データ (国土数値情報 A40 + 国土地理院、取得・正規化スクリプトは `pipeline/scripts/normalize-*.sh`) を組み込んだ状態で `make pipeline-run` を全国 pbf で再実行し、manifest / ADR-0003 に実測を追記する
-2. MBTiles (nixpkgs tilemaker は macOS/arm64 でクラッシュ → Linux で実測)
-3. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)
+1. MBTiles (nixpkgs tilemaker は macOS/arm64 でクラッシュ → Linux で実測)
+2. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)
+3. **東京都・福井県・香川県の津波浸水想定区域データの補完** — 国の A40 データセットに存在しない (ADR-0003 参照)。都道府県独自のハザードマップ公開状況を調査する

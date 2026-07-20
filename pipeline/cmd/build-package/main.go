@@ -61,10 +61,17 @@ func main() {
 		buffer   = flag.Int("buffer", 1, "一括モード: 海岸線メッシュに加える隣接リング数 (1 ≈ 10km)")
 		inunPath = flag.String("inundation", "", "浸水想定区域の正規化 GeoJSON (省略時は FlagInundation を付与しない)")
 		shelPath = flag.String("shelters", "", "避難場所の正規化 GeoJSON (省略時は shelters テーブルを空にする)")
+		tiles    = flag.Bool("tiles", false, "MBTiles (tilemaker) も生成する。macOS/arm64 では tilemaker がクラッシュするため Linux 専用 (ADR-0003)")
 	)
 	flag.Parse()
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatal(err)
+	}
+
+	if *tiles {
+		if _, err := exec.LookPath("tilemaker"); err != nil {
+			log.Fatal("-tiles が指定されましたが tilemaker が PATH にありません (nix develop 内か確認してください)")
+		}
 	}
 
 	var inunIdx *inundation.Index
@@ -86,14 +93,14 @@ func main() {
 
 	switch {
 	case *pbfPath != "":
-		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM, inunIdx, allShelters); err != nil {
+		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM, inunIdx, allShelters, *tiles); err != nil {
 			log.Fatal(err)
 		}
 	case *meshCode != "" && *osmPath != "":
 		if _, err := mesh.ParseSecondary(*meshCode); err != nil {
 			log.Fatal(err)
 		}
-		r, err := buildOne(*meshCode, *osmPath, *outDir, *demCache, *skipDEM, true, inunIdx, allShelters)
+		r, err := buildOne(*meshCode, *osmPath, "", *outDir, *demCache, *skipDEM, true, inunIdx, allShelters)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -107,13 +114,15 @@ func main() {
 // ---- 一括モード ----
 
 type manifestEntry struct {
-	Mesh     string `json:"mesh"`
-	File     string `json:"file"`
-	Bytes    int64  `json:"bytes"`
-	SHA256   string `json:"sha256"`
-	Nodes    int    `json:"nodes"`
-	Edges    int    `json:"edges"`
-	Shelters int    `json:"shelters"`
+	Mesh       string `json:"mesh"`
+	File       string `json:"file"`
+	Bytes      int64  `json:"bytes"`
+	SHA256     string `json:"sha256"`
+	Nodes      int    `json:"nodes"`
+	Edges      int    `json:"edges"`
+	Shelters   int    `json:"shelters"`
+	TilesFile  string `json:"tiles_file,omitempty"`
+	TilesBytes int64  `json:"tiles_bytes,omitempty"`
 }
 
 type manifest struct {
@@ -124,7 +133,7 @@ type manifest struct {
 }
 
 func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
-	inunIdx *inundation.Index, allShelters []shelterdata.Shelter) error {
+	inunIdx *inundation.Index, allShelters []shelterdata.Shelter, tiles bool) error {
 	start := time.Now()
 	tmp, err := os.MkdirTemp("", "tendenko-build-*")
 	if err != nil {
@@ -155,7 +164,7 @@ func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
 
 	// 2. osmium で一括切り出し (1 パスあたり 50 メッシュ)
 	extractStart := time.Now()
-	if err := extractAll(pbfPath, codes, tmp); err != nil {
+	if err := extractAll(pbfPath, codes, tmp, tiles); err != nil {
 		return err
 	}
 	fmt.Printf("extract done (%.1fs)\n", time.Since(extractStart).Seconds())
@@ -164,7 +173,11 @@ func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
 	var entries []manifestEntry
 	skipped := 0
 	for i, code := range codes {
-		r, err := buildOne(code, filepath.Join(tmp, "mesh-"+code+".osm"), outDir, demCache, skipDEM, false,
+		meshPBF := ""
+		if tiles {
+			meshPBF = filepath.Join(tmp, "mesh-"+code+".osm.pbf")
+		}
+		r, err := buildOne(code, filepath.Join(tmp, "mesh-"+code+".osm"), meshPBF, outDir, demCache, skipDEM, false,
 			inunIdx, allShelters)
 		if err != nil {
 			return fmt.Errorf("mesh %s: %w", code, err)
@@ -174,8 +187,12 @@ func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
 			continue
 		}
 		entries = append(entries, *r)
-		fmt.Printf("[%d/%d] %s nodes=%d edges=%d %.1fMB\n",
-			i+1, len(codes), code, r.Nodes, r.Edges, float64(r.Bytes)/1024/1024)
+		tilesNote := ""
+		if r.TilesFile != "" {
+			tilesNote = fmt.Sprintf(" tiles=%.1fMB", float64(r.TilesBytes)/1024/1024)
+		}
+		fmt.Printf("[%d/%d] %s nodes=%d edges=%d %.1fMB%s\n",
+			i+1, len(codes), code, r.Nodes, r.Edges, float64(r.Bytes)/1024/1024, tilesNote)
 	}
 
 	// 4. manifest.json (FR-06 の差分 DL 用: バージョン・ハッシュ・生成日時)
@@ -193,12 +210,17 @@ func runBatch(pbfPath, outDir, demCache string, buffer int, skipDEM bool,
 		return err
 	}
 
-	var total int64
+	var total, totalTiles int64
 	for _, e := range entries {
 		total += e.Bytes
+		totalTiles += e.TilesBytes
 	}
-	fmt.Printf("\npackages=%d skipped(empty)=%d total=%.1fMB elapsed=%.0fs\n",
-		len(entries), skipped, float64(total)/1024/1024, time.Since(start).Seconds())
+	tilesNote := ""
+	if tiles {
+		tilesNote = fmt.Sprintf(" tiles_total=%.1fMB", float64(totalTiles)/1024/1024)
+	}
+	fmt.Printf("\npackages=%d skipped(empty)=%d total=%.1fMB%s elapsed=%.0fs\n",
+		len(entries), skipped, float64(total)/1024/1024, tilesNote, time.Since(start).Seconds())
 	return nil
 }
 
@@ -224,7 +246,7 @@ func coastalMeshes(coastOSM string) (map[string]bool, error) {
 // パス数 × 全読みで遅く、抽出数を増やすとメモリで死ぬ (全国 4,481 メッシュで実測 OOM kill)。
 // そこで親の 1 次メッシュ (80km 四方、全国の沿岸で 100 個規模) 単位でまず切り出し、
 // 小さくなった各 1 次メッシュ pbf から配下の 2 次メッシュを展開する。
-func extractAll(pbfPath string, codes []string, dir string) error {
+func extractAll(pbfPath string, codes []string, dir string, withPBF bool) error {
 	byParent := map[string][]string{}
 	for _, c := range codes {
 		byParent[c[:4]] = append(byParent[c[:4]], c)
@@ -259,7 +281,9 @@ func extractAll(pbfPath string, codes []string, dir string) error {
 			i/parentBatch+1, passes, len(batch), time.Since(start).Seconds())
 	}
 
-	// レベル 2: 各 1 次メッシュ pbf から配下の 2 次メッシュを展開 (XML 出力)
+	// レベル 2: 各 1 次メッシュ pbf から配下の 2 次メッシュを展開 (XML 出力。
+	// withPBF なら tilemaker 用に同じ範囲の pbf も併せて出力する。単一パスで両方
+	// 書き出せるため osmium の読み込みコストは増えない)
 	for _, p := range parents {
 		parentPBF := filepath.Join(dir, "parent-"+p+".osm.pbf")
 		var extracts []extractCfg
@@ -268,10 +292,11 @@ func extractAll(pbfPath string, codes []string, dir string) error {
 			if err != nil {
 				return err
 			}
-			extracts = append(extracts, extractCfg{
-				Output: "mesh-" + code + ".osm",
-				BBox:   [4]float64{bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat},
-			})
+			bboxArr := [4]float64{bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat}
+			extracts = append(extracts, extractCfg{Output: "mesh-" + code + ".osm", BBox: bboxArr})
+			if withPBF {
+				extracts = append(extracts, extractCfg{Output: "mesh-" + code + ".osm.pbf", BBox: bboxArr})
+			}
 		}
 		if err := osmiumExtract(parentPBF, dir, extracts); err != nil {
 			return err
@@ -311,12 +336,47 @@ func osmium(args ...string) error {
 	return nil
 }
 
+// tilemakerShareDir は tilemaker に同梱される config/process ファイルのディレクトリを探す
+// (nix パッケージのレイアウト: <bin>/../share/tilemaker)。
+func tilemakerShareDir() (string, error) {
+	bin, err := exec.LookPath("tilemaker")
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(filepath.Dir(bin), "..", "share", "tilemaker")
+	if _, err := os.Stat(dir); err != nil {
+		return "", fmt.Errorf("tilemaker: share dir not found at %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// tilemakerRun は 1 メッシュ分の MBTiles を生成する (OpenMapTiles スキーマ)。
+func tilemakerRun(pbfPath, bboxCSV, outPath string) error {
+	share, err := tilemakerShareDir()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("tilemaker",
+		"--input", pbfPath,
+		"--output", outPath,
+		"--bbox", bboxCSV,
+		"--config", filepath.Join(share, "config-openmaptiles.json"),
+		"--process", filepath.Join(share, "process-openmaptiles.lua"),
+	)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tilemaker %s: %w", pbfPath, err)
+	}
+	return nil
+}
+
 // ---- 単一メッシュの生成 ----
 
 // buildOne は 1 メッシュの region.sqlite を生成する。歩行可能な道路が無ければ nil を返す。
 // inunIdx が nil なら浸水フラグを付与しない。allShelters は全域分の避難場所を渡し、
 // メッシュ範囲内のものだけをここでフィルタする (呼び出し側では読み込みを 1 回に留める)。
-func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool,
+// meshPBFPath が空でなければ、同じ範囲の MBTiles も生成する (tilemaker が必要、ADR-0003)。
+func buildOne(meshCode, osmPath, meshPBFPath, outDir, demCache string, skipDEM, verbose bool,
 	inunIdx *inundation.Index, allShelters []shelterdata.Shelter) (*manifestEntry, error) {
 	start := time.Now()
 	stage := func(name string, from time.Time) time.Time {
@@ -424,8 +484,7 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool,
 	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows, shelterRows); err != nil {
 		return nil, err
 	}
-	stage("sqlite", t)
-	stage("total", start)
+	t = stage("sqlite", t)
 
 	info, err := os.Stat(outPath)
 	if err != nil {
@@ -435,10 +494,29 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool,
 	if err != nil {
 		return nil, err
 	}
-	return &manifestEntry{
+	entry := &manifestEntry{
 		Mesh: meshCode, File: file, Bytes: info.Size(), SHA256: sum,
 		Nodes: len(nodeRows), Edges: len(edgeRows), Shelters: len(shelterRows),
-	}, nil
+	}
+
+	if meshPBFPath != "" {
+		tilesFile := "tiles-" + meshCode + ".mbtiles"
+		tilesPath := filepath.Join(outDir, tilesFile)
+		bboxCSV := fmt.Sprintf("%g,%g,%g,%g", bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat)
+		if err := tilemakerRun(meshPBFPath, bboxCSV, tilesPath); err != nil {
+			return nil, err
+		}
+		tilesInfo, err := os.Stat(tilesPath)
+		if err != nil {
+			return nil, err
+		}
+		entry.TilesFile = tilesFile
+		entry.TilesBytes = tilesInfo.Size()
+		stage("tiles", t)
+	}
+	stage("total", start)
+
+	return entry, nil
 }
 
 func fileSHA256(path string) (string, error) {

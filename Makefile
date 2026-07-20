@@ -7,7 +7,7 @@ SHELL := ./scripts/nix-bash.sh
 .DEFAULT_GOAL := help
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
-        pipeline-normalize-data app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
+        pipeline-normalize-data pipeline-tiles-one app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -32,13 +32,17 @@ pipeline-normalize-data: ## 浸水想定区域 (A40)・避難場所の実デー�
 
 # 一括: PBF に置いた OSM データの海岸線メッシュを全生成 (全国は japan-latest.osm.pbf を指定)。
 # 浸水想定区域・避難場所の正規化データがあれば自動で使う (make pipeline-normalize-data で生成)。
+# TILES=1 で MBTiles も生成する (要 tilemaker in PATH。macOS/arm64 は nix の tilemaker が
+# クラッシュするため Linux 専用。ローカルで試すだけなら make pipeline-tiles-one を使う)。
 PBF ?= pipeline/data/japan-latest.osm.pbf
+TILES ?=
 INUNDATION := $(wildcard pipeline/data/inundation-japan.geojson)
 SHELTERS := $(wildcard pipeline/data/shelters-japan.geojson)
-pipeline-run: ## 地域パッケージを一括生成 (PBF=OSM pbf パス。沿岸メッシュ自動列挙 + manifest)
+pipeline-run: ## 地域パッケージを一括生成 (PBF=OSM pbf パス。TILES=1 で MBTiles も生成。沿岸メッシュ自動列挙 + manifest)
 	cd pipeline && go run ./cmd/build-package -pbf $(abspath $(PBF)) -out out -dem-cache data/dem-cache \
 		$(if $(INUNDATION),-inundation $(abspath $(INUNDATION))) \
-		$(if $(SHELTERS),-shelters $(abspath $(SHELTERS)))
+		$(if $(SHELTERS),-shelters $(abspath $(SHELTERS))) \
+		$(if $(TILES),-tiles)
 
 # 単一メッシュ (デバッグ用): make pipeline-run-one MESH=584177 (data/mesh-<MESH>.osm を切り出しておく)
 MESH ?= 584177
@@ -47,6 +51,12 @@ pipeline-run-one: ## 単一メッシュの地域パッケージを生成 (MESH=2
 
 pipeline-test: ## pipeline/ のテストを実行
 	cd pipeline && go test ./...
+
+# 単一メッシュの MBTiles 生成 (デバッグ用): make pipeline-tiles-one MESH=584177 BBOX=141.875,39.25,142.0,39.3333333
+# nixpkgs の tilemaker は macOS/arm64 でクラッシュするため Docker の Linux コンテナ経由で実行する (要 Docker Desktop起動、ADR-0003)。
+# 本番パイプライン (Cloud Run jobs) は Linux なので直接 tilemaker を使える。
+pipeline-tiles-one: ## 単一メッシュの MBTiles を生成 (MESH, BBOX=経度,緯度,経度,緯度)
+	cd pipeline && ./scripts/tilemaker-docker.sh data/mesh-$(MESH).osm.pbf $(BBOX) out/tiles-$(MESH).mbtiles
 
 app-generate: ## Xcode プロジェクトを project.yml から生成 (XcodeGen)
 	cd app && xcodegen generate

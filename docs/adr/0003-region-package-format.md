@@ -156,6 +156,19 @@ FlagInundation の付与と shelters テーブルの実装を行った。実デ�
 - 避難場所は全国で **39,756 件** (メッシュ境界をまたぐ避難場所は隣接メッシュに重複収載されるため、正規化データの 40,393 件より若干少ない実配置数になる)
 - 実例: 釜石 (584177) 8,729 エッジ中 4,022 (46%) に浸水フラグ、避難場所 46 件。高知市 (503324) 106,979 エッジ中 56,248 (53%) に浸水フラグ、避難場所 364 件 (南海トラフ想定地域として高い割合が妥当)。東京都心 (533946) は A40 データ欠落により浸水フラグ 0 件 (上記の既知の欠落を参照)。避難場所は 2 件 (佃島小学校・佃中学校) で、これは正規化データを独立に bbox フィルタしても同じ結果になることを確認済み — このメッシュが中央区佃島の湾岸部を指しており、その地域では実際にこの 2 施設のみが津波指定避難場所として登録されているため (バグではなく実データの反映)
 
+### 追記 (2026-07-20): MBTiles 生成の Linux 検証とパイプライン組み込み
+
+macOS/arm64 での nixpkgs tilemaker クラッシュが実行環境固有の問題か確認するため、Docker Desktop 経由でローカルに Linux コンテナ (`nixos/nix:latest`、`nix shell nixpkgs#tilemaker` で同一パッケージ) を立てて同じコマンドを実行した。**Linux では問題なく動作**(釜石メッシュ 0.9 秒・576KB、仙台中心部 1.8 秒・2.8MB)。これで tilemaker のクラッシュは macOS/arm64 固有の nixpkgs ビルド問題であり、本番パイプライン (Cloud Run jobs = Linux) には影響しないと確定した。
+
+これを踏まえ `build-package` に `-tiles` フラグを追加し、MBTiles 生成をパイプライン本体に組み込んだ:
+
+- `extractAll` のレベル 2 (1 次メッシュ→2 次メッシュ展開) で、tiles 有効時は同じ範囲の `.osm.pbf` も併せて出力する (osmium は 1 回の入力読み込みで複数出力を書けるため、追加コストはほぼゼロ)
+- `buildOne` は `tilemaker` が PATH にあれば `tiles-<mesh>.mbtiles` を生成し、manifest.json に `tiles_file` / `tiles_bytes` を記録する。`-tiles` 未指定時や `tilemaker` が無い環境 (macOS ローカル) では region.sqlite の生成のみ行い、エラーにはしない (`-tiles` 指定時に限り起動時チェックで明示的に fail する)
+- ローカル (macOS) で単一メッシュの MBTiles を試したいときのために `pipeline/scripts/tilemaker-docker.sh` と `make pipeline-tiles-one` を用意した (Docker の Linux コンテナ経由。本番では不要)
+- **動作確認 (Linux コンテナ + クロスコンパイルした pipeline バイナリでの e2e)**: 一括モードで 5 パッケージ生成、region.sqlite (計 1.0MB) + tiles (計 1.8MB) が manifest.json に正しく記録されることを確認
+
+MBTiles を含めても NFR-04 (150MB) への影響は無視できる (仙台中心部で region.sqlite 7.4MB + tiles 2.8MB = 10.2MB)。全国 2,515 パッケージへの本番適用 (Cloud Run jobs) は次のインフラ構築セッションで行う。
+
 ## 帰結
 
 - pipeline/cmd/build-package は「対象メッシュ列挙 → osmium 抽出 → グラフ構築 + DEM/浸水域焼き込み → region.sqlite + tiles.mbtiles + manifest 生成 → GCS」の構成になる

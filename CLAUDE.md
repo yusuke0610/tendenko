@@ -32,6 +32,6 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 
 ## 次セッションの最優先タスク
 
-1. MBTiles (nixpkgs tilemaker は macOS/arm64 でクラッシュ → Linux で実測)
-2. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)
+1. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)。テスト用 MBTiles は `pipeline/out/tiles-584177.mbtiles` に実物がある
+2. 全国 2,515 パッケージへの MBTiles 本番適用 (Cloud Run jobs で `-tiles` 付きの `make pipeline-run`。ローカル macOS では tilemaker が動かないため要 Linux 環境、ADR-0003 参照)
 3. **東京都・福井県・香川県の津波浸水想定区域データの補完** — 国の A40 データセットに存在しない (ADR-0003 参照)。都道府県独自のハザードマップ公開状況を調査する

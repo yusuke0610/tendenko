@@ -32,6 +32,6 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 
 ## 次セッションの最優先タスク
 
-1. **浸水想定区域 (国土数値情報 A40) と指定緊急避難場所 (国土地理院) の実データ取得元をユーザーに確認する** — URL を推測で使わない方針のため未着手。pipeline 側の受け口 (`build-package -inundation` / `-shelters`、正規化 GeoJSON) は実装・テスト済み (ADR-0003 参照)。実データを ogr2ogr 等でこの形式に変換すれば全国生成に組み込める
+1. **全国パッケージの再生成** — 浸水想定区域・避難場所の実データ (国土数値情報 A40 + 国土地理院、取得・正規化スクリプトは `pipeline/scripts/normalize-*.sh`) を組み込んだ状態で `make pipeline-run` を全国 pbf で再実行し、manifest / ADR-0003 に実測を追記する
 2. MBTiles (nixpkgs tilemaker は macOS/arm64 でクラッシュ → Linux で実測)
 3. app/ の地図表示 (MapLibre + MBTiles オフライン読み込み)

@@ -15,11 +15,11 @@
 //	go run ./cmd/build-package -mesh 584177 -osm data/mesh-584177.osm -out out
 //
 // 浸水想定区域 (-inundation) と避難場所 (-shelters) は、正規化 GeoJSON を受け取る
-// (internal/inundation, internal/shelterdata のドキュメント参照)。実データの取得元
-// (国土数値情報 A40・国土地理院) は URL 未確認のため ADR-0003 に TODO として残している。
+// (internal/inundation, internal/shelterdata のドキュメント参照)。実データ (国土数値情報
+// A40・国土地理院) の取得・正規化は pipeline/scripts/normalize-a40.sh /
+// normalize-shelters.sh を参照 (取得元 URL・ライセンスは ADR-0003 と docs/licenses.md)。
 //
 // TODO:
-//   - 浸水想定区域・避難場所の実データ取得元 URL の確認と、正規化 GeoJSON への変換 ETL
 //   - tilemaker で MBTiles 生成 (macOS/arm64 の nixpkgs ビルドがクラッシュするため Linux で)
 //   - GCS アップロード
 package main
@@ -350,10 +350,13 @@ func buildOne(meshCode, osmPath, outDir, demCache string, skipDEM, verbose bool,
 	}
 
 	// 浸水想定区域との交差判定 (FR-12)。inunIdx が nil (実データ未指定) ならスキップ。
+	// 全国規模の Index (数十万ポリゴン) をメッシュ範囲で Subset してから使うことで、
+	// エッジごとの bbox 走査を大幅に減らす (実測: 釜石メッシュで 3.5 秒 → 数十 ms)。
 	if inunIdx != nil {
+		meshIdx := inunIdx.Subset(bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat)
 		for i := range edges {
 			a, b := nodes[edges[i].From], nodes[edges[i].To]
-			if inunIdx.Intersects(a.Lat, a.Lon, b.Lat, b.Lon) {
+			if meshIdx.Intersects(a.Lat, a.Lon, b.Lat, b.Lon) {
 				edges[i].Flags |= graph.FlagInundation
 			}
 		}

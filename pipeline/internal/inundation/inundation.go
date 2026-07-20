@@ -120,6 +120,22 @@ func NewIndex(polys []Polygon) *Index {
 	return idx
 }
 
+// Subset は指定範囲と bbox が重なるポリゴンだけを含む新しい Index を返す。
+// 全国規模の Index (数十万ポリゴン) を対象メッシュ周辺に絞り込んでから Intersects を
+// 繰り返し呼ぶことで、全ポリゴンの bbox 走査をエッジ数×3 回ではなく 1 回に抑えられる。
+func (idx *Index) Subset(minLon, minLat, maxLon, maxLat float64) *Index {
+	var polys []Polygon
+	var bboxes []bbox
+	for i, b := range idx.bboxes {
+		if maxLon < b.minLon || minLon > b.maxLon || maxLat < b.minLat || minLat > b.maxLat {
+			continue
+		}
+		polys = append(polys, idx.polys[i])
+		bboxes = append(bboxes, b)
+	}
+	return &Index{polys: polys, bboxes: bboxes}
+}
+
 // Intersects は線分 (道路グラフのエッジ) がいずれかのポリゴンと交差するか近似判定する。
 // 両端点と中点をサンプルする。2 次メッシュ内の短い辺が前提の近似であり、
 // 両端点が外でもポリゴンの角をかすめて通過する辺は見逃し得る (ADR-0003 に明記)。

@@ -7,7 +7,7 @@ SHELL := ./scripts/nix-bash.sh
 .DEFAULT_GOAL := help
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
-        app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
+        pipeline-normalize-data app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -26,10 +26,19 @@ server-test: ## server/ のテストを実行
 server-lint: ## server/ を golangci-lint でチェック
 	cd server && golangci-lint run ./...
 
-# 一括: PBF に置いた OSM データの海岸線メッシュを全生成 (全国は japan-latest.osm.pbf を指定)
+pipeline-normalize-data: ## 浸水想定区域 (A40)・避難場所の実データを正規化 GeoJSON に変換 (要: data/a40/*.zip, data/raw/shelters-all.geojson。取得元は ADR-0003)
+	cd pipeline && ./scripts/normalize-a40.sh
+	cd pipeline && ./scripts/normalize-shelters.sh
+
+# 一括: PBF に置いた OSM データの海岸線メッシュを全生成 (全国は japan-latest.osm.pbf を指定)。
+# 浸水想定区域・避難場所の正規化データがあれば自動で使う (make pipeline-normalize-data で生成)。
 PBF ?= pipeline/data/japan-latest.osm.pbf
+INUNDATION := $(wildcard pipeline/data/inundation-japan.geojson)
+SHELTERS := $(wildcard pipeline/data/shelters-japan.geojson)
 pipeline-run: ## 地域パッケージを一括生成 (PBF=OSM pbf パス。沿岸メッシュ自動列挙 + manifest)
-	cd pipeline && go run ./cmd/build-package -pbf $(abspath $(PBF)) -out out -dem-cache data/dem-cache
+	cd pipeline && go run ./cmd/build-package -pbf $(abspath $(PBF)) -out out -dem-cache data/dem-cache \
+		$(if $(INUNDATION),-inundation $(abspath $(INUNDATION))) \
+		$(if $(SHELTERS),-shelters $(abspath $(SHELTERS)))
 
 # 単一メッシュ (デバッグ用): make pipeline-run-one MESH=584177 (data/mesh-<MESH>.osm を切り出しておく)
 MESH ?= 584177

@@ -63,6 +63,22 @@ func TestIndexIntersects(t *testing.T) {
 	}
 }
 
+func TestIndexSubset(t *testing.T) {
+	far := Polygon{Rings: [][][2]float64{{{100, 100}, {110, 100}, {110, 110}, {100, 110}, {100, 100}}}}
+	idx := NewIndex([]Polygon{square, far})
+
+	sub := idx.Subset(-1, -1, 11, 11) // square を含み far を含まない範囲
+	if len(sub.polys) != 1 {
+		t.Fatalf("Subset polys = %d, want 1", len(sub.polys))
+	}
+	if !sub.Intersects(5, 5, 5, 5) {
+		t.Error("Subset 後も square との交差判定は成立するはず")
+	}
+	if sub.Intersects(105, 105, 105, 105) {
+		t.Error("Subset で除外したはずの far と交差判定されてしまっている")
+	}
+}
+
 func TestLoad(t *testing.T) {
 	geojson := `{
 		"type": "FeatureCollection",

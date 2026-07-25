@@ -7,7 +7,8 @@ SHELL := ./scripts/nix-bash.sh
 .DEFAULT_GOAL := help
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
-        pipeline-normalize-data pipeline-tiles-one app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
+        pipeline-normalize-data pipeline-tiles-one pipeline-image pipeline-run-docker \
+        app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -57,6 +58,16 @@ pipeline-test: ## pipeline/ のテストを実行
 # 本番パイプライン (Cloud Run jobs) は Linux なので直接 tilemaker を使える。
 pipeline-tiles-one: ## 単一メッシュの MBTiles を生成 (MESH, BBOX=経度,緯度,経度,緯度)
 	cd pipeline && ./scripts/tilemaker-docker.sh data/mesh-$(MESH).osm.pbf $(BBOX) out/tiles-$(MESH).mbtiles
+
+# 本番実行イメージ (Cloud Run jobs、ADR-0001/0003)。Dockerfile は flake.nix からツールを realise する。
+# make 経由でも nix develop 内で docker を叩くだけ (docker 自体は macOS の Docker Desktop)。
+pipeline-image: ## パイプラインの本番実行イメージをビルド (Linux、-tiles 対応)
+	docker build -t tendenko-pipeline .
+
+# ローカル Linux コンテナで -tiles 付きパイプラインを回す (PBF/OUT はコンテナ内パス。DATA をマウント)。
+# 例: make pipeline-run-docker DATA=pipeline/data ARGS="-pbf /data/tohoku-latest.osm.pbf -out /data/out-docker -tiles -skip-dem -buffer 0"
+pipeline-run-docker: ## Docker Linux コンテナでパイプラインを実行 (DATA=マウント元, ARGS=build-package 引数)
+	docker run --rm -v "$(abspath $(DATA)):/data" tendenko-pipeline $(ARGS)
 
 app-generate: ## Xcode プロジェクトを project.yml から生成 (XcodeGen)
 	cd app && xcodegen generate

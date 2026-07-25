@@ -18,6 +18,20 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
+        # パイプラインの本番実行 (Cloud Run jobs) 用のツール束 (ADR-0001/0003)。
+        # Dockerfile が Linux コンテナ内で `nix build .#pipeline-tools` して realise する。
+        # flake.lock 固定なので devShell と同一バージョンの osmium/tilemaker/gdal になる。
+        packages.pipeline-tools = pkgs.buildEnv {
+          name = "tendenko-pipeline-tools";
+          paths = with pkgs; [
+            osmium-tool
+            tilemaker
+            gdal
+            bashInteractive
+            coreutils
+          ];
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             # iOS (Xcode 本体は Nix 管理外。プロジェクト生成のみ Nix 提供)

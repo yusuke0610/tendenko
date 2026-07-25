@@ -1,0 +1,20 @@
+# 巨大な入力データ・生成物・ビルド成果物はイメージに入れない (実行時にマウント/DL する)
+pipeline/data
+pipeline/out
+pipeline/out-*
+pipeline/build-package
+
+# iOS アプリ・Xcode 成果物 (パイプラインイメージには不要)
+app/Tendenko.xcodeproj
+app/**/.build
+**/DerivedData
+
+# Nix / direnv のローカル成果物
+.direnv
+result
+result-*
+
+# VCS・作業ログ
+.git
+report
+*.log

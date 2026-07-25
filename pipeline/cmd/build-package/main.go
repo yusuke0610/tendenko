@@ -19,12 +19,15 @@
 // A40・国土地理院) の取得・正規化は pipeline/scripts/normalize-a40.sh /
 // normalize-shelters.sh を参照 (取得元 URL・ライセンスは ADR-0003 と docs/licenses.md)。
 //
-// TODO:
-//   - tilemaker で MBTiles 生成 (macOS/arm64 の nixpkgs ビルドがクラッシュするため Linux で)
-//   - GCS アップロード
+// 生成後に GCS へ上げる (ADR-0004):
+//
+//	go run ./cmd/build-package -pbf data/japan-latest.osm.pbf -tiles -out out -upload gs://<bucket>
+//
+// 認証は ADC (Cloud Run jobs の Workload Identity / ローカルの gcloud auth application-default login)。
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +48,7 @@ import (
 	"github.com/yusuke0610/tendenko/pipeline/internal/mesh"
 	"github.com/yusuke0610/tendenko/pipeline/internal/osmxml"
 	"github.com/yusuke0610/tendenko/pipeline/internal/pkgwriter"
+	"github.com/yusuke0610/tendenko/pipeline/internal/publish"
 	"github.com/yusuke0610/tendenko/pipeline/internal/shelterdata"
 )
 
@@ -62,6 +66,7 @@ func main() {
 		inunPath = flag.String("inundation", "", "浸水想定区域の正規化 GeoJSON (省略時は FlagInundation を付与しない)")
 		shelPath = flag.String("shelters", "", "避難場所の正規化 GeoJSON (省略時は shelters テーブルを空にする)")
 		tiles    = flag.Bool("tiles", false, "MBTiles (tilemaker) も生成する。macOS/arm64 では tilemaker がクラッシュするため Linux 専用 (ADR-0003)")
+		upload   = flag.String("upload", "", "一括モード: 生成後に GCS へアップロードする (gs://bucket[/prefix]、ADR-0004)。認証は ADC")
 	)
 	flag.Parse()
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
@@ -96,6 +101,11 @@ func main() {
 		if err := runBatch(*pbfPath, *outDir, *demCache, *buffer, *skipDEM, inunIdx, allShelters, *tiles); err != nil {
 			log.Fatal(err)
 		}
+		if *upload != "" {
+			if err := publish.Upload(context.Background(), *upload, *outDir); err != nil {
+				log.Fatal(err)
+			}
+		}
 	case *meshCode != "" && *osmPath != "":
 		if _, err := mesh.ParseSecondary(*meshCode); err != nil {
 			log.Fatal(err)
@@ -114,15 +124,16 @@ func main() {
 // ---- 一括モード ----
 
 type manifestEntry struct {
-	Mesh       string `json:"mesh"`
-	File       string `json:"file"`
-	Bytes      int64  `json:"bytes"`
-	SHA256     string `json:"sha256"`
-	Nodes      int    `json:"nodes"`
-	Edges      int    `json:"edges"`
-	Shelters   int    `json:"shelters"`
-	TilesFile  string `json:"tiles_file,omitempty"`
-	TilesBytes int64  `json:"tiles_bytes,omitempty"`
+	Mesh        string `json:"mesh"`
+	File        string `json:"file"`
+	Bytes       int64  `json:"bytes"`
+	SHA256      string `json:"sha256"`
+	Nodes       int    `json:"nodes"`
+	Edges       int    `json:"edges"`
+	Shelters    int    `json:"shelters"`
+	TilesFile   string `json:"tiles_file,omitempty"`
+	TilesBytes  int64  `json:"tiles_bytes,omitempty"`
+	TilesSHA256 string `json:"tiles_sha256,omitempty"`
 }
 
 type manifest struct {
@@ -510,8 +521,13 @@ func buildOne(meshCode, osmPath, meshPBFPath, outDir, demCache string, skipDEM, 
 		if err != nil {
 			return nil, err
 		}
+		tilesSum, err := fileSHA256(tilesPath)
+		if err != nil {
+			return nil, err
+		}
 		entry.TilesFile = tilesFile
 		entry.TilesBytes = tilesInfo.Size()
+		entry.TilesSHA256 = tilesSum
 		stage("tiles", t)
 	}
 	stage("total", start)

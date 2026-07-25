@@ -84,6 +84,7 @@ docs-adr: ## 新しい ADR を連番で作成 (template.md をコピー)
 	cp docs/adr/template.md "docs/adr/$$next-title-me.md"; \
 	echo "created docs/adr/$$next-title-me.md — ファイル名とタイトルを変更してください"
 
-fmt: ## gofmt + nixfmt でフォーマット
+fmt: ## gofmt + nixfmt + tofu fmt でフォーマット
 	gofmt -w server pipeline
 	nixfmt flake.nix
+	cd infra && tofu fmt

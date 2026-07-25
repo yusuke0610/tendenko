@@ -24,7 +24,7 @@
 
 ### 1. GCS レイアウトと manifest
 
-公開読み取り専用バケット直下に置く (バケット名・アクセス制御は infra セッションで確定):
+配信バケット直下に置く (バケット名・アクセス制御は infra セッションで確定。アクセス範囲は後述の「追記 (2026-07-25): バケットは当面非公開」で private に決着):
 
 ```
 <bucket>/
@@ -84,3 +84,19 @@
 - app ターゲットに GCS を叩く `PackageFetcher` 本番実装と、`CLLocationManager` → `CachePlan` → `RegionPackageStore` を繋ぐ位置情報監視を追加する。`ContentView` の同梱データ読み込みを、キャッシュから取得したパッケージの読み込みに置き換える
 - パッケージ本体を配る GCS バケットの OpenTofu 定義 (infra/、nixpkgs の `tofu`) と、パイプラインの GCS アップロードは**別セッション**で行う (この ADR がアプリの読む契約を固定するので、独立して進められる)
 - **再検討条件**: 実機でキャッシュ予算・DL 時間が要件に合わなければ desired set の縮小 (3×3 → 進行方向優先) や予算値を見直す。manifest 肥大が問題化したら分割 manifest を導入する
+
+## 追記 (2026-07-25): パイプラインの GCS アップロードと manifest への tiles_sha256 追加
+
+配信の書き手側 (パイプライン) を実装した。
+
+- `pipeline/internal/publish`: 生成済みの `out/` を GCS へ上げる。`cloud.google.com/go/storage` を使い、認証は ADC (Cloud Run jobs の Workload Identity / ローカルの `gcloud auth application-default login`)。オブジェクトレイアウトは決定 §1 のとおり (`manifest.json` はルート、パッケージは `packages/` 配下)。**manifest.json はパッケージ本体を全て上げ終えてから最後に上げる** — クライアントが未アップロードのパッケージを参照する manifest を見ないようにするため。既存オブジェクトと CRC32C が一致するファイルはスキップする (gsutil rsync 相当の差分。GCS が CRC32C を native に持つため md5/sha 再計算より安い)
+- `build-package` に `-upload gs://bucket[/prefix]` フラグを追加 (一括モードのみ)。オブジェクトキー写像・gs URL パースは純粋関数として単体テスト済み
+- **manifest スキーマに `tiles_sha256` を追加**した。決定 §1 で app 側の検証に必要としながら、パイプラインが tiles のハッシュを記録していなかった (region の sha256 のみ)。`buildOne` で MBTiles 生成時に計算するようにし、app の `RegionPackageStore` が region と同じく tiles も sha256 検証できるようにした。schema_version は 1 のまま (後方互換な追加フィールド)
+
+## 追記 (2026-07-25): バケットは当面非公開 (private) にする
+
+決定 §1 では「公開読み取り専用バケット」と書いたが、infra 実装時に **当面は private に倒す**判断をした。
+
+- **理由**: 配信物は OSM 由来の道路グラフ (region.sqlite) を含み、**ODbL share-alike 義務の整理が [ADR-0002](0002-oss-licensing.md) / [docs/licenses.md](../licenses.md) で未決のまま残っている** (ADR-0003 の「正直な弱点」でも既知)。バケットを world-public (allUsers:objectViewer) にすることは「公開配布」に相当し、その未解決の義務を発火させる。ライセンス整理より先に技術都合で公開してしまうのを避ける
+- **決定**: `infra/` の `google_storage_bucket.packages` は `public_access_prevention = "enforced"` + `uniform_bucket_level_access = true` で作り、allUsers を付けない。パイプラインは自分の SA 権限 (`roles/storage.objectAdmin`) でアップロードできる。app からの取得 (認証なしの URLSession) はこの制約を解除してから繋ぐ
+- **帰結**: FR-02 の app 配線 (Task) は、(a) ODbL 整理を済ませて world-public 化する、または (b) 署名付き URL / 認証付き取得にする、のいずれかを先に決める必要がある。この選択は app 実装セッションで扱う。infra はローカル state で bootstrap し、`tofu init` / `validate` まで通ることを確認済み (`plan`/`apply` は project_id と認証が必要)

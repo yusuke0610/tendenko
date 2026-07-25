@@ -17,11 +17,14 @@ RUN mkdir -p /etc/nix && echo "experimental-features = nix-command flakes" >> /e
 WORKDIR /src
 COPY . .
 
-# ランタイムツール (flake.lock 固定) を realise し、静的な Go バイナリをビルドする。
+# ツール (flake.lock 固定: go/osmium/tilemaker/gdal) を realise する。
 # path:. で非 git の flake として扱い、Docker ビルドコンテキストに .git が無くても動くようにする。
+# devShell は xcodegen (macOS 専用) 依存で Linux 評価できないため、devShell ではなく
+# pipeline-tools の go でビルドする。
 RUN nix build "path:.#pipeline-tools" --out-link /opt/tools \
-    && nix develop "path:." --command bash -c \
-       "cd pipeline && CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/build-package ./cmd/build-package"
+    && cd pipeline \
+    && HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/gopath CGO_ENABLED=0 \
+       /opt/tools/bin/go build -trimpath -o /usr/local/bin/build-package ./cmd/build-package
 
 # tilemaker は <bin>/../share/tilemaker の config/process を参照する (buildEnv が share も束ねる)。
 ENV PATH="/opt/tools/bin:/usr/local/bin:${PATH}"

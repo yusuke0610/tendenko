@@ -24,6 +24,7 @@
         packages.pipeline-tools = pkgs.buildEnv {
           name = "tendenko-pipeline-tools";
           paths = with pkgs; [
+            go # バイナリのビルドに使う (Linux コンテナ内。devShell は xcodegen 依存で Linux 評価不可)
             osmium-tool
             tilemaker
             gdal

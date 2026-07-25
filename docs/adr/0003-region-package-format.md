@@ -169,6 +169,16 @@ macOS/arm64 での nixpkgs tilemaker クラッシュが実行環境固有の問�
 
 MBTiles を含めても NFR-04 (150MB) への影響は無視できる (仙台中心部で region.sqlite 7.4MB + tiles 2.8MB = 10.2MB)。全国 2,515 パッケージへの本番適用 (Cloud Run jobs) は次のインフラ構築セッションで行う。
 
+### 追記 (2026-07-25): 本番実行イメージのコンテナ化と Linux での -tiles 全工程検証
+
+Cloud Run jobs で -tiles 付き全国 run を回すため、パイプラインを Linux コンテナ化した ([ADR-0001](0001-execution-platform.md) の Cloud Run jobs)。
+
+- **リポジトリ直下の `Dockerfile`**: `nixos/nix` ベース。Linux コンテナ内で flake.nix (正本) から `packages.pipeline-tools` (go/osmium/tilemaker/gdal を flake.lock 固定で束ねた buildEnv) を realise し、静的な Go バイナリ (CGO 不要) を焼き込む。ビルド自体が Linux で走るためクロスコンパイルや linux-builder が不要
+  - **ハマりどころ**: 当初 `nix develop` (devShell) で go を得ようとしたが、devShell が `xcodegen` (macOS 専用パッケージ) に依存するため `aarch64-linux` で評価不能だった。go を pipeline-tools 側へ移して解決
+- **検証 (Docker Desktop の Linux コンテナ)**: `mesh-584177.osm.pbf` で -tiles 付き一括モードを実行し、**3 パッケージすべてで region.sqlite + tiles.mbtiles + manifest.json が生成される**ことを確認 (manifest に tiles_file/tiles_bytes/tiles_sha256 も記録)。これで macOS の tilemaker クラッシュは本番 (Linux) で解消されることを実行環境ごと確定した
+- **既知の見栄えギャップ**: tilemaker は海岸線 (OSM water_polygons) と landcover (Natural Earth) の外部シェープファイルを任意で読む。コンテナに同梱していないため警告が出るが、OSM 由来の地物からタイルは生成される (道路・水域は描画される)。海岸線/landcover のベースレイヤが必要になったら、これらのシェープをイメージへ追加する
+- **infra**: `infra/pipeline.tf` に Cloud Run v2 job + Cloud Scheduler + データバケット + Artifact Registry + SA/IAM を定義 ([ADR-0001](0001-execution-platform.md) Stage 1)。イメージ push と `tofu apply`、全国 run は GCP 認証が要るため別途
+
 ### 追記 (2026-07-20): app/ でのオフライン地図表示を実装・実機確認
 
 MapLibre Native が MBTiles をネットワーク越しに取得する前提の設計であることを踏まえ、TendenkoStorage に **ローカル HTTP サーバー方式**で組み込んだ。

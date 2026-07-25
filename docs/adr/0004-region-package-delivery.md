@@ -93,7 +93,16 @@
 - `build-package` に `-upload gs://bucket[/prefix]` フラグを追加 (一括モードのみ)。オブジェクトキー写像・gs URL パースは純粋関数として単体テスト済み
 - **manifest スキーマに `tiles_sha256` を追加**した。決定 §1 で app 側の検証に必要としながら、パイプラインが tiles のハッシュを記録していなかった (region の sha256 のみ)。`buildOne` で MBTiles 生成時に計算するようにし、app の `RegionPackageStore` が region と同じく tiles も sha256 検証できるようにした。schema_version は 1 のまま (後方互換な追加フィールド)
 
-## 追記 (2026-07-25): バケットは当面非公開 (private) にする
+## 追記 (2026-07-25): 公開 (public) に決定 — 直下の「当面非公開」を supersede
+
+下の「当面非公開」で挙げた前提 ((a)/(b) のいずれかを先に決める) について、**ODbL を整理して public 配信する ((a)) と決定した** ([ADR-0002](0002-oss-licensing.md) データ側 Accepted)。
+
+- **ODbL の帰結**: region.sqlite は OSM の派生データベースであり、share-alike により「**無償で入手可能**」であることが求められる。公開配信がその履行そのものであり、逆に**認証・署名 URL でアクセスを絞る ((b)) と ODbL の anti-TPM 条項と衝突する** (制限のない無償版を別途出す義務が残る)。よって OSM 由来データは public 配信が最も整合的
+- **infra**: `google_storage_bucket.packages` を `public_access_prevention = "inherited"` に変更し、`allUsers` に `roles/storage.objectViewer` を付与。app は認証なしの HTTPS (`https://storage.googleapis.com/<bucket>/...`) で取得する (`packages_public_base_url` 出力を参照)。`tofu fmt` / `validate` 済み
+- **公開再生成の前提 (ブロッカー)**: (1) 公開パッケージに **OSM 帰属表示**をアプリで出す (FR-02 app 配線)、(2) **A40 条件付き県の由来フラグを公開パッケージから除外**する (県別精査は未完、ADR-0002)。この 2 つが済むまで実データの public 再アップロードはしない
+- 下の「当面非公開」の節は**この決定により無効**。infra の private 設定 (enforced) はこの追記の public 設定に置き換え済み
+
+## 追記 (2026-07-25): バケットは当面非公開 (private) にする 〔SUPERSEDED — 上の公開決定に置き換え〕
 
 決定 §1 では「公開読み取り専用バケット」と書いたが、infra 実装時に **当面は private に倒す**判断をした。
 

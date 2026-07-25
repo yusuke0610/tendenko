@@ -19,11 +19,14 @@ struct ContentView: View {
     @State private var center = CLLocationCoordinate2D.kamaishi
     @State private var servedPath: String?
     @State private var loadError: String?
+    @State private var routePolyline: [GeoPoint] = []
+    @State private var inundationSegments: [[GeoPoint]] = []
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let styleURL {
-                MapView(styleURL: styleURL, center: center, zoomLevel: 12)
+                MapView(styleURL: styleURL, center: center, zoomLevel: 12,
+                        routePolyline: routePolyline, inundationSegments: inundationSegments)
                     .ignoresSafeArea()
             } else if let loadError {
                 Text(loadError).foregroundStyle(.red).padding()
@@ -36,9 +39,13 @@ struct ContentView: View {
         .task {
             coordinator.start()
             await presentMap()
+            await computeOverlay()
         }
         .onChange(of: coordinator.tilesPath) { _, _ in
-            Task { await presentMap() }
+            Task {
+                await presentMap()
+                await computeOverlay()
+            }
         }
     }
 
@@ -65,6 +72,42 @@ struct ContentView: View {
         } catch {
             loadError = "地図サーバーの起動に失敗: \(error)"
         }
+    }
+
+    /// 現在地メッシュの region.sqlite から避難経路と浸水エッジを計算してオーバーレイに渡す。
+    /// 読込 + 探索はバックグラウンドで行う (RoadGraph は Sendable)。結果が無ければ何もしない。
+    private func computeOverlay() async {
+        let regionPath = coordinator.regionPath
+            ?? Bundle.main.path(forResource: "region-584177", ofType: "sqlite")
+        guard let regionPath else { return }
+        let start = startPoint()
+
+        let result = await Task.detached { () -> ([GeoPoint], [[GeoPoint]])? in
+            guard let graph = try? GraphLoader.load(paths: [regionPath]),
+                  let shelters = try? ShelterLoader.load(paths: [regionPath]),
+                  let startNode = RouteGeometry.nearestNode(to: start, in: graph)
+            else { return nil }
+            // 避難場所を goal ノードに丸め、最小コスト経路を 1 本求める (FR-12)
+            let goals = Set(shelters.compactMap { RouteGeometry.nearestNode(to: $0.point, in: graph) })
+            let route = EvacuationRouter.route(graph: graph, from: startNode, goals: goals)
+            let line = route.map { RouteGeometry.polyline($0, in: graph) } ?? []
+            let inundation = RouteGeometry.inundationSegments(in: graph)
+            return (line, inundation)
+        }.value
+
+        if let (line, inundation) = result {
+            routePolyline = line
+            inundationSegments = inundation
+        }
+    }
+
+    /// 経路の始点 (現在地メッシュの中心。未測位なら釜石サンプルの中心)。
+    private func startPoint() -> GeoPoint {
+        if let mesh = coordinator.currentMesh {
+            let c = mesh.bbox.center
+            return GeoPoint(lat: c.lat, lon: c.lon)
+        }
+        return GeoPoint(lat: 39.29, lon: 141.94)
     }
 }
 

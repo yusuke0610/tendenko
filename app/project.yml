@@ -34,6 +34,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.yusuke0610.tendenko
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # FR-02: 現在地メッシュの地域パッケージを自動 DL するために測位する (発災時の操作ゼロが原則)
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "現在地周辺の避難用地図と経路データを事前に取得するために使用します。"
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
         TARGETED_DEVICE_FAMILY: 1 # iPhone のみ

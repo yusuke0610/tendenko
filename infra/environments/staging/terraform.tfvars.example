@@ -1,0 +1,11 @@
+# cp terraform.tfvars.example terraform.tfvars して値を入れる (terraform.tfvars は .gitignore 対象)。
+# 本番と別プロジェクト・別バケット名にすること (ADR-0005)。
+project_id           = "your-staging-project-id"
+packages_bucket_name = "tendenko-packages-stg-your-staging-project-id"
+data_bucket_name     = "tendenko-data-stg-your-staging-project-id"
+
+# 検証イメージを push したら設定する:
+# pipeline_image = "asia-northeast1-docker.pkg.dev/your-staging-project-id/tendenko/pipeline:latest"
+
+# 手元から検証パッケージを直接アップロードするなら自分のアカウントを:
+# pipeline_uploader = "user:you@example.com"

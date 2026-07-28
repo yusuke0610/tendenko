@@ -1,0 +1,7 @@
+# cp terraform.tfvars.example terraform.tfvars して値を入れる (terraform.tfvars は .gitignore 対象)。
+project_id           = "your-prod-project-id"
+packages_bucket_name = "tendenko-packages-your-prod-project-id"
+data_bucket_name     = "tendenko-data-your-prod-project-id"
+
+# イメージを Artifact Registry に push したら設定する (それまでジョブ/スケジューラは作られない):
+# pipeline_image = "asia-northeast1-docker.pkg.dev/your-prod-project-id/tendenko/pipeline:latest"

@@ -1,14 +1,20 @@
 # データパイプラインの本番実行基盤 (ADR-0001 Stage 1: Cloud Run jobs + Cloud Scheduler)。
 #
 # パイプラインイメージ (リポジトリ直下の Dockerfile、flake.nix 由来) を Cloud Run job として
-# 定期実行し、全国の地域パッケージ (region.sqlite + tiles.mbtiles) を生成して配信バケットへ
+# 実行し、全国の地域パッケージ (region.sqlite + tiles.mbtiles) を生成して配信バケットへ
 # アップロードする (ADR-0003/0004)。入力データ (pbf/GeoJSON/DEM) はデータバケットから読む。
+# 定期実行 (Cloud Scheduler) を作るかは enable_schedule で切り替える (staging は手動、ADR-0005)。
 #
 # 実行データの GCS 配置 (要手動投入、gitignore 対象のローカルデータをアップロードする):
 #   gs://<data_bucket>/japan-latest.osm.pbf
 #   gs://<data_bucket>/inundation-japan.geojson
 #   gs://<data_bucket>/shelters-japan.geojson
 #   gs://<data_bucket>/dem-cache/...           (実行のたびに書き込まれ永続する)
+
+locals {
+  # イメージが指定され、かつスケジュール有効な環境でのみ Scheduler を作る。
+  make_schedule = var.pipeline_image != "" && var.enable_schedule
+}
 
 # --- 必要な API ---
 resource "google_project_service" "required" {
@@ -117,7 +123,7 @@ resource "google_cloud_run_v2_job" "pipeline" {
   }
 }
 
-# --- Cloud Scheduler で定期実行 ---
+# --- Cloud Scheduler で定期実行 (enable_schedule かつイメージ指定時のみ) ---
 resource "google_service_account" "scheduler" {
   account_id   = "tendenko-scheduler"
   display_name = "tendenko パイプライン起動 (Cloud Scheduler)"
@@ -125,7 +131,7 @@ resource "google_service_account" "scheduler" {
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
-  count    = var.pipeline_image == "" ? 0 : 1
+  count    = local.make_schedule ? 1 : 0
   name     = google_cloud_run_v2_job.pipeline[0].name
   location = var.region
   project  = var.project_id
@@ -134,7 +140,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
 }
 
 resource "google_cloud_scheduler_job" "pipeline" {
-  count     = var.pipeline_image == "" ? 0 : 1
+  count     = local.make_schedule ? 1 : 0
   name      = "tendenko-pipeline"
   project   = var.project_id
   region    = var.region

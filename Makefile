@@ -8,7 +8,7 @@ SHELL := ./scripts/nix-bash.sh
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
         pipeline-normalize-data pipeline-tiles-one pipeline-image pipeline-run-docker \
-        app-generate app-build app-test domain-test infra-plan infra-apply docs-adr fmt
+        app-generate app-build app-test domain-test infra-init infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -84,11 +84,16 @@ app-test: app-generate domain-test ## ドメイン層 + アプリターゲット
 	cd app && xcodebuild -project Tendenko.xcodeproj -scheme Tendenko \
 		-destination 'platform=iOS Simulator,name=iPhone 17' test CODE_SIGNING_ALLOWED=NO
 
-infra-plan: ## OpenTofu の plan を実行
-	cd infra && tofu plan
+# 環境を ENV で指定する (staging / production、ADR-0005)。デフォルトは事故防止のため staging。
+ENV ?= staging
+infra-init: ## OpenTofu の init (ENV=staging|production)
+	cd infra/environments/$(ENV) && tofu init
 
-infra-apply: ## OpenTofu の apply を実行
-	cd infra && tofu apply
+infra-plan: ## OpenTofu の plan を実行 (ENV=staging|production)
+	cd infra/environments/$(ENV) && tofu plan
+
+infra-apply: ## OpenTofu の apply を実行 (ENV=staging|production)
+	cd infra/environments/$(ENV) && tofu apply
 
 docs-adr: ## 新しい ADR を連番で作成 (template.md をコピー)
 	@last=$$(ls docs/adr | grep -E '^[0-9]{4}-' | sort | tail -n1 | cut -c1-4); \
@@ -99,4 +104,4 @@ docs-adr: ## 新しい ADR を連番で作成 (template.md をコピー)
 fmt: ## gofmt + nixfmt + tofu fmt でフォーマット
 	gofmt -w server pipeline
 	nixfmt flake.nix
-	cd infra && tofu fmt
+	cd infra && tofu fmt -recursive

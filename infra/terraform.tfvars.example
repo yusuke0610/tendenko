@@ -1,8 +1,0 @@
-# cp terraform.tfvars.example terraform.tfvars して自分の値を入れる。
-# terraform.tfvars は .gitignore 対象 (実 project_id/バケット名を含むため)。
-
-project_id           = "your-gcp-project-id"
-packages_bucket_name = "tendenko-packages-your-gcp-project-id"
-
-# パイプラインを Cloud Run jobs で動かすようになったら、その SA を指定する:
-# pipeline_uploader = "serviceAccount:pipeline@your-gcp-project-id.iam.gserviceaccount.com"

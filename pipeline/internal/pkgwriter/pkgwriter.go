@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -58,7 +59,10 @@ CREATE TABLE shelters (
 `
 
 // Write は region.sqlite を新規作成する。既存ファイルがあれば失敗する。
-func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow, shelters []ShelterRow) error {
+// attributions はこのパッケージに含まれるデータの出典 (帰属表示用)。meta の
+// "attributions" キーに改行区切りで格納する (アプリが表示中パッケージの帰属を
+// per-package で出す、ADR-0002)。
+func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow, shelters []ShelterRow, attributions []string) error {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=rwc&_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)")
 	if err != nil {
 		return err
@@ -119,6 +123,7 @@ func Write(path, meshCode, sourceNote string, nodes []NodeRow, edges []EdgeRow, 
 		"generated_at":     time.Now().UTC().Format(time.RFC3339),
 		"source":           sourceNote,
 		"edges_undirected": "true",
+		"attributions":     strings.Join(attributions, "\n"),
 	}
 	for k, v := range meta {
 		if _, err := tx.Exec("INSERT INTO meta (key, value) VALUES (?, ?)", k, v); err != nil {

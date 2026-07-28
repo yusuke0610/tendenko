@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var loadError: String?
     @State private var routePolyline: [GeoPoint] = []
     @State private var inundationSegments: [[GeoPoint]] = []
+    @State private var attributions: [String] = ["OpenStreetMap contributors", "国土地理院"]
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -34,7 +35,8 @@ struct ContentView: View {
                 ProgressView("地図を読み込み中…")
             }
             // ODbL / 各データの帰属表示は常時可視にする (ADR-0002)。
-            AttributionLabel()
+            // 表示中パッケージの meta から出典を組み立てる (per-package)。
+            AttributionLabel(attributions: attributions)
         }
         .task {
             coordinator.start()
@@ -82,7 +84,7 @@ struct ContentView: View {
         guard let regionPath else { return }
         let start = startPoint()
 
-        let result = await Task.detached { () -> ([GeoPoint], [[GeoPoint]])? in
+        let result = await Task.detached { () -> ([GeoPoint], [[GeoPoint]], [String])? in
             guard let graph = try? GraphLoader.load(paths: [regionPath]),
                   let shelters = try? ShelterLoader.load(paths: [regionPath]),
                   let startNode = RouteGeometry.nearestNode(to: start, in: graph)
@@ -92,12 +94,15 @@ struct ContentView: View {
             let route = EvacuationRouter.route(graph: graph, from: startNode, goals: goals)
             let line = route.map { RouteGeometry.polyline($0, in: graph) } ?? []
             let inundation = RouteGeometry.inundationSegments(in: graph)
-            return (line, inundation)
+            // 表示中パッケージの出典 (帰属表示、ADR-0002)。古いパッケージは空。
+            let attrs = (try? MetaLoader.attributions(path: regionPath)) ?? []
+            return (line, inundation, attrs)
         }.value
 
-        if let (line, inundation) = result {
+        if let (line, inundation, attrs) = result {
             routePolyline = line
             inundationSegments = inundation
+            if !attrs.isEmpty { attributions = attrs }
         }
     }
 
@@ -112,16 +117,23 @@ struct ContentView: View {
 }
 
 /// OSM (ODbL) と各データソースの帰属表示 (ADR-0002 / docs/licenses.md)。
+/// 表示中パッケージの出典に応じて per-package で内容が変わる (福井県データ表示時は「© 福井県」等)。
 private struct AttributionLabel: View {
+    let attributions: [String]
+
+    private var text: String {
+        attributions.map { "© \($0)" }.joined(separator: " ・ ")
+    }
+
     var body: some View {
-        Text("© OpenStreetMap contributors ・ © 国土地理院")
+        Text(text)
             .font(.caption2)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(.ultraThinMaterial, in: Capsule())
             .padding(8)
-            .accessibilityLabel("地図データ © OpenStreetMap contributors、避難場所・標高 © 国土地理院")
+            .accessibilityLabel("地図データの出典: " + attributions.joined(separator: "、"))
     }
 }
 

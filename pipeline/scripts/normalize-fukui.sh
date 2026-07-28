@@ -41,10 +41,11 @@ layer=$(basename "$shp" .shp)
 echo "normalize: fukui ($layer)"
 
 # .prj が無いので -s_srs で第6系 (EPSG:6674) を明示する。
+# attribution 列で出典 (福井県, CC BY 4.0) を埋め込む (帰属表示、ADR-0002)。
 ogr2ogr -f GeoJSON -s_srs EPSG:6674 -t_srs EPSG:4326 -makevalid -simplify 0.00003 \
   -lco COORDINATE_PRECISION=6 \
   data/fukui/fukui.dissolved.geojson "$shp" \
-  -dialect sqlite -sql "SELECT ST_Union(geometry) AS geometry FROM \"$layer\""
+  -dialect sqlite -sql "SELECT ST_Union(geometry) AS geometry, '福井県' AS attribution FROM \"$layer\""
 
 rm -rf "$dir" # 展開済み shp は変換後不要 (ディスク節約)
 

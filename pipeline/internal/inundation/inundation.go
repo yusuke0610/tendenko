@@ -16,6 +16,9 @@ import (
 // Polygon はリング列。Rings[0] が外周、以降は穴。各点は [lon, lat] (GeoJSON の座標順)。
 type Polygon struct {
 	Rings [][][2]float64
+	// Attribution はこのポリゴンの出典 (帰属表示用)。GeoJSON の properties.attribution から読む。
+	// 例: A40 は "国土交通省 (国土数値情報)"、福井県データは "福井県"。空なら帰属追跡しない。
+	Attribution string
 }
 
 type bbox struct {
@@ -74,6 +77,9 @@ func Load(path string) ([]Polygon, error) {
 	}
 	var fc struct {
 		Features []struct {
+			Properties struct {
+				Attribution string `json:"attribution"`
+			} `json:"properties"`
 			Geometry struct {
 				Type        string          `json:"type"`
 				Coordinates json.RawMessage `json:"coordinates"`
@@ -86,20 +92,21 @@ func Load(path string) ([]Polygon, error) {
 
 	var polys []Polygon
 	for i, f := range fc.Features {
+		attr := f.Properties.Attribution
 		switch f.Geometry.Type {
 		case "Polygon":
 			var rings [][][2]float64
 			if err := json.Unmarshal(f.Geometry.Coordinates, &rings); err != nil {
 				return nil, fmt.Errorf("inundation: feature %d: %w", i, err)
 			}
-			polys = append(polys, Polygon{Rings: rings})
+			polys = append(polys, Polygon{Rings: rings, Attribution: attr})
 		case "MultiPolygon":
 			var multi [][][][2]float64
 			if err := json.Unmarshal(f.Geometry.Coordinates, &multi); err != nil {
 				return nil, fmt.Errorf("inundation: feature %d: %w", i, err)
 			}
 			for _, rings := range multi {
-				polys = append(polys, Polygon{Rings: rings})
+				polys = append(polys, Polygon{Rings: rings, Attribution: attr})
 			}
 		}
 	}
@@ -140,6 +147,13 @@ func (idx *Index) Subset(minLon, minLat, maxLon, maxLat float64) *Index {
 // 両端点と中点をサンプルする。2 次メッシュ内の短い辺が前提の近似であり、
 // 両端点が外でもポリゴンの角をかすめて通過する辺は見逃し得る (ADR-0003 に明記)。
 func (idx *Index) Intersects(lat1, lon1, lat2, lon2 float64) bool {
+	_, hit := idx.Match(lat1, lon1, lat2, lon2)
+	return hit
+}
+
+// Match は Intersects と同じ交差判定に加え、最初に一致したポリゴンの出典 (Attribution) を返す。
+// hit=false のとき attribution は空。帰属表示 (どの県/機関のデータでフラグが付いたか) の追跡に使う。
+func (idx *Index) Match(lat1, lon1, lat2, lon2 float64) (attribution string, hit bool) {
 	minLon, maxLon := math.Min(lon1, lon2), math.Max(lon1, lon2)
 	minLat, maxLat := math.Min(lat1, lat2), math.Max(lat1, lat2)
 	midLat, midLon := (lat1+lat2)/2, (lon1+lon2)/2
@@ -150,8 +164,8 @@ func (idx *Index) Intersects(lat1, lon1, lat2, lon2 float64) bool {
 			continue
 		}
 		if p.Contains(lat1, lon1) || p.Contains(lat2, lon2) || p.Contains(midLat, midLon) {
-			return true
+			return p.Attribution, true
 		}
 	}
-	return false
+	return "", false
 }

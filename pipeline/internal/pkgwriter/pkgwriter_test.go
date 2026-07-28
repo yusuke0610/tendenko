@@ -20,7 +20,8 @@ func TestWrite(t *testing.T) {
 		{Name: "釜石中学校", Lat: 39.2758, Lon: 141.885, ElevM: 20.0},
 		{Name: "標高不明の避難所", Lat: 39.26, Lon: 141.89, ElevM: math.NaN()},
 	}
-	if err := Write(path, "584177", "test-source", nodes, edges, shelters); err != nil {
+	if err := Write(path, "584177", "test-source", nodes, edges, shelters,
+		[]string{"OpenStreetMap contributors", "国土地理院", "福井県"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,6 +53,12 @@ func TestWrite(t *testing.T) {
 		t.Errorf("meta mesh = %q (err=%v), want 584177", meshVal, err)
 	}
 
+	var attrVal string
+	if err := db.QueryRow("SELECT value FROM meta WHERE key = 'attributions'").Scan(&attrVal); err != nil ||
+		attrVal != "OpenStreetMap contributors\n国土地理院\n福井県" {
+		t.Errorf("meta attributions = %q (err=%v)", attrVal, err)
+	}
+
 	// エッジ探索用のインデックスが両方向に存在すること
 	for _, idx := range []string{"idx_edges_from", "idx_edges_to"} {
 		var cnt int
@@ -74,10 +81,10 @@ func TestWrite(t *testing.T) {
 
 func TestWriteRefusesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "region.sqlite")
-	if err := Write(path, "584177", "s", nil, nil, nil); err != nil {
+	if err := Write(path, "584177", "s", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(path, "584177", "s", nil, nil, nil); err == nil {
+	if err := Write(path, "584177", "s", nil, nil, nil, nil); err == nil {
 		t.Error("second Write to same path should fail (schema already exists)")
 	}
 }

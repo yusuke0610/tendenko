@@ -383,6 +383,23 @@ func tilemakerRun(pbfPath, bboxCSV, outPath string) error {
 
 // ---- 単一メッシュの生成 ----
 
+// packageAttributions はパッケージに実際に含まれるデータの出典を、表示順で重複なく返す。
+// OSM は常に (道路・地図タイル)、標高/避難場所があれば国土地理院、浸水フラグに使われた
+// 出典 (国土交通省 A40・福井県など) を加える。アプリはこれを "© <出典> ・ …" で表示する。
+func packageAttributions(hasDEM, hasShelters bool, inunAttrs map[string]bool) []string {
+	attrs := []string{"OpenStreetMap contributors"}
+	if hasDEM || hasShelters {
+		attrs = append(attrs, "国土地理院") // 標高 (DEM) と指定緊急避難場所の両方が国土地理院
+	}
+	// 浸水データの出典は決定的な順序にする (map の反復順は不定のためソート)。
+	inun := make([]string, 0, len(inunAttrs))
+	for a := range inunAttrs {
+		inun = append(inun, a)
+	}
+	sort.Strings(inun)
+	return append(attrs, inun...)
+}
+
 // buildOne は 1 メッシュの region.sqlite を生成する。歩行可能な道路が無ければ nil を返す。
 // inunIdx が nil なら浸水フラグを付与しない。allShelters は全域分の避難場所を渡し、
 // メッシュ範囲内のものだけをここでフィルタする (呼び出し側では読み込みを 1 回に留める)。
@@ -423,12 +440,16 @@ func buildOne(meshCode, osmPath, meshPBFPath, outDir, demCache string, skipDEM, 
 	// 浸水想定区域との交差判定 (FR-12)。inunIdx が nil (実データ未指定) ならスキップ。
 	// 全国規模の Index (数十万ポリゴン) をメッシュ範囲で Subset してから使うことで、
 	// エッジごとの bbox 走査を大幅に減らす (実測: 釜石メッシュで 3.5 秒 → 数十 ms)。
+	inunAttrs := map[string]bool{} // このメッシュでフラグ付与に使われた浸水データの出典
 	if inunIdx != nil {
 		meshIdx := inunIdx.Subset(bbox.MinLon, bbox.MinLat, bbox.MaxLon, bbox.MaxLat)
 		for i := range edges {
 			a, b := nodes[edges[i].From], nodes[edges[i].To]
-			if meshIdx.Intersects(a.Lat, a.Lon, b.Lat, b.Lon) {
+			if attr, hit := meshIdx.Match(a.Lat, a.Lon, b.Lat, b.Lon); hit {
 				edges[i].Flags |= graph.FlagInundation
+				if attr != "" {
+					inunAttrs[attr] = true
+				}
 			}
 		}
 		t = stage("inundation", t)
@@ -489,10 +510,13 @@ func buildOne(meshCode, osmPath, meshPBFPath, outDir, demCache string, skipDEM, 
 		shelterRows = append(shelterRows, pkgwriter.ShelterRow{Name: s.Name, Lat: s.Lat, Lon: s.Lon, ElevM: elevM})
 	}
 
+	// このパッケージに実際に含まれるデータの出典を集める (帰属表示用、ADR-0002)。
+	attributions := packageAttributions(client != nil, len(shelterRows) > 0, inunAttrs)
+
 	file := "region-" + meshCode + ".sqlite"
 	outPath := filepath.Join(outDir, file)
 	_ = os.Remove(outPath) // pkgwriter.Write は既存ファイルに追記できないため消してから作る
-	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows, shelterRows); err != nil {
+	if err := pkgwriter.Write(outPath, meshCode, sourceNote, nodeRows, edgeRows, shelterRows, attributions); err != nil {
 		return nil, err
 	}
 	t = stage("sqlite", t)

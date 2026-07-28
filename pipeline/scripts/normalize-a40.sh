@@ -50,10 +50,13 @@ for zip in data/a40/*.zip; do
   shp=$(find "$dir" -name '*.shp' | head -1)
   layer=$(basename "$shp" .shp)
   echo "normalize: $base ($layer)"
+  # attribution 列を付けておくと、build-package が浸水フラグの出典を per-package で
+  # meta に記録できる (帰属表示、ADR-0002)。A40 は国土数値情報 (国土交通省)。
   ogr2ogr -f GeoJSON -t_srs EPSG:4326 -makevalid -simplify 0.00003 \
     -lco COORDINATE_PRECISION=6 \
     "data/a40/$base.dissolved.geojson" "$shp" \
-    -dialect sqlite -sql "SELECT ST_Union(geometry) AS geometry FROM \"$layer\""
+    -dialect sqlite \
+    -sql "SELECT ST_Union(geometry) AS geometry, '国土交通省 (国土数値情報)' AS attribution FROM \"$layer\""
   rm -rf "$dir" # 展開済み shp は変換後不要 (ディスク節約)
 done
 

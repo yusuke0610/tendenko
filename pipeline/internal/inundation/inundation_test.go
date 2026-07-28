@@ -114,3 +114,47 @@ func TestLoad(t *testing.T) {
 		t.Error("MultiPolygon の 2 件目が正しく読めていない")
 	}
 }
+
+func TestMatchAttribution(t *testing.T) {
+	// 2 つの出典のポリゴンを別の場所に置く。
+	a40 := Polygon{Rings: [][][2]float64{{{0, 0}, {10, 0}, {10, 10}, {0, 10}, {0, 0}}},
+		Attribution: "国土交通省 (国土数値情報)"}
+	fukui := Polygon{Rings: [][][2]float64{{{20, 20}, {30, 20}, {30, 30}, {20, 30}, {20, 20}}},
+		Attribution: "福井県"}
+	idx := NewIndex([]Polygon{a40, fukui})
+
+	// a40 の内部を通るエッジ → a40 の出典
+	if attr, hit := idx.Match(5, 5, 5, 6); !hit || attr != "国土交通省 (国土数値情報)" {
+		t.Errorf("a40 領域: Match = (%q, %v), want (国土交通省…, true)", attr, hit)
+	}
+	// fukui の内部 → 福井県
+	if attr, hit := idx.Match(25, 25, 25, 26); !hit || attr != "福井県" {
+		t.Errorf("fukui 領域: Match = (%q, %v), want (福井県, true)", attr, hit)
+	}
+	// どちらの外 → hit=false
+	if attr, hit := idx.Match(50, 50, 50, 51); hit || attr != "" {
+		t.Errorf("領域外: Match = (%q, %v), want (\"\", false)", attr, hit)
+	}
+	// Intersects は従来どおり bool を返す
+	if !idx.Intersects(5, 5, 5, 6) {
+		t.Error("Intersects は a40 領域で true のはず")
+	}
+}
+
+func TestLoadReadsAttribution(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "attr.geojson")
+	geojson := `{"type":"FeatureCollection","features":[
+	  {"type":"Feature","properties":{"attribution":"福井県"},
+	   "geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}`
+	if err := os.WriteFile(path, []byte(geojson), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	polys, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(polys) != 1 || polys[0].Attribution != "福井県" {
+		t.Errorf("Attribution = %q (polys=%d), want 福井県", polys[0].Attribution, len(polys))
+	}
+}

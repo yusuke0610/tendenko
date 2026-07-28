@@ -9,20 +9,39 @@
 # -simplify 0.00003度 (≈3m) は、エッジを両端点+中点でサンプルする既存の近似判定
 # (inundation.go) の誤差予算に対して無視できる精度低下。
 #
+# 再配布制限のある県 (scripts/a40-redistribution-denylist.txt) は公開配布パッケージから
+# 除外する (ADR-0002)。開発・ローカル検証で全県を含めたいときは A40_INCLUDE_RESTRICTED=1。
+#
 # 使い方:
 #   1. データ入手元 URL のリストを data/raw/a40_urls.txt に用意する (ADR-0003 参照)
 #   2. xargs -P 4 -I{} curl -sL -O {} < data/raw/a40_urls.txt  (data/a40/ で実行)
 #   3. nix develop 内で: scripts/normalize-a40.sh
 #
-# 出力: data/inundation-japan.geojson (44 都道府県分の MultiPolygon を結合した FeatureCollection)
+# 出力: data/inundation-japan.geojson (再配布可の都道府県 + 福井県の MultiPolygon を結合)
 set -eu
 
 cd "$(dirname "$0")/.."
 mkdir -p data/a40/extract
 rm -f data/a40/*.dissolved.geojson
 
+# 再配布制限県のコードを denylist から読む (公開配布パッケージから除外、ADR-0002)。
+# A40_INCLUDE_RESTRICTED=1 なら全県を含める (開発・ローカル検証用)。
+denylist=$(grep -oE '^[0-9]{2}' scripts/a40-redistribution-denylist.txt | tr '\n' ' ')
+if [ "${A40_INCLUDE_RESTRICTED:-}" = "1" ]; then
+  echo "warning: A40_INCLUDE_RESTRICTED=1 — 再配布制限県も含めます (公開配布には使わないこと)"
+  denylist=""
+fi
+
 for zip in data/a40/*.zip; do
   base=$(basename "$zip" .zip)
+  # ファイル名 A40-<ver>_<prefcode>_GML から都道府県コードを取り出す。
+  pref=$(echo "$base" | sed -E 's/^A40-[0-9]+_([0-9]+)_.*/\1/')
+  case " $denylist " in
+    *" $pref "*)
+      echo "skip (再配布制限): $base (都道府県コード $pref)"
+      continue
+      ;;
+  esac
   dir="data/a40/extract/$base"
   mkdir -p "$dir"
   # 一部の zip は Shift-JIS ファイル名の付属 txt (ソフトウェアについて等) を含み、

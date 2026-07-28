@@ -8,7 +8,7 @@ SHELL := ./scripts/nix-bash.sh
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
         pipeline-normalize-data pipeline-tiles-one pipeline-image pipeline-run-docker \
-        app-generate app-build app-test domain-test infra-init infra-plan infra-apply docs-adr fmt
+        app-generate app-build app-run app-test domain-test infra-init infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -76,6 +76,20 @@ app-generate: ## Xcode プロジェクトを project.yml から生成 (XcodeGen)
 app-build: app-generate ## iOS アプリをシミュレータ向けにビルド (署名なし)
 	cd app && xcodebuild -project Tendenko.xcodeproj -scheme Tendenko \
 		-destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
+
+# シミュレータ名は DEVICE で指定 (デフォルト iPhone 17)。起動済みが無ければブートし、Simulator.app を前面表示する。
+DEVICE ?= iPhone 17
+app-run: app-build ## iOS アプリをシミュレータで起動 (UI 確認用。DEVICE=シミュレータ名)
+	@settings=$$(cd app && xcodebuild -project Tendenko.xcodeproj -scheme Tendenko \
+		-destination 'generic/platform=iOS Simulator' -showBuildSettings 2>/dev/null); \
+	app_path=$$(echo "$$settings" | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $$2; exit}')/Tendenko.app; \
+	bundle_id=$$(echo "$$settings" | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER /{print $$2; exit}'); \
+	udid=$$(xcrun simctl list devices available | grep -F "$(DEVICE) (" | grep -oE '[0-9A-F-]{36}' | head -1); \
+	if [ -z "$$udid" ]; then echo "error: シミュレータ '$(DEVICE)' が見つかりません (xcrun simctl list devices available で確認)"; exit 1; fi; \
+	xcrun simctl bootstatus "$$udid" -b >/dev/null 2>&1 || true; \
+	xcrun simctl install "$$udid" "$$app_path"; \
+	open -a Simulator; \
+	xcrun simctl launch "$$udid" "$$bundle_id"
 
 domain-test: ## ドメイン層のテストを実行 (シミュレータ不要・高速。TDD はまずこれ)
 	cd app/TendenkoDomain && swift test

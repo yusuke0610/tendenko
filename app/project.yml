@@ -22,7 +22,14 @@ targets:
   Tendenko:
     type: application
     platform: iOS
-    sources: [Tendenko]
+    sources:
+      - path: Tendenko
+        excludes:
+          - "Resources/fonts/**"
+      # フォントグリフ (ADR-0006) はディレクトリ構造を保ったまま同梱する必要があるため
+      # folder reference (青いフォルダ) にする。GlyphServer が fontstack サブディレクトリごと参照する。
+      - path: Tendenko/Resources/fonts
+        type: folder
     dependencies:
       - package: TendenkoDomain
         product: TendenkoDomain

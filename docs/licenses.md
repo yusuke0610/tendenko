@@ -26,6 +26,7 @@
 | 依存 | ライセンス | 配布物に含まれるか | 注意点 |
 |---|---|---|---|
 | MapLibre Native | BSD-2-Clause | ✅ アプリに同梱 | 帰属表示のみ。コピーレフトなし |
+| Noto Sans (Klokan Technologies パッチ、CJK 込み) | SIL OFL 1.1 | ✅ アプリに同梱 (地名・道路名ラベル描画用グリフ、ADR-0006) | フォント単体の再配布・販売は不可だがアプリへの組込みは可。取得元: [openmaptiles/fonts](https://github.com/openmaptiles/fonts) v2.0 リリース (`noto-sans.zip` の `Noto Sans Regular/` のみ使用、34MB) |
 | Go 標準ライブラリ | BSD-3-Clause | ✅ バイナリに静的リンク | 帰属表示のみ |
 | GDAL | MIT | ❌ ビルドツールのみ | 義務なし |
 | osmium-tool | GPL-3.0 | ❌ ビルドツールのみ | パイプラインで実行するだけで、成果物にコードは含まれない → GPL 伝播なし |

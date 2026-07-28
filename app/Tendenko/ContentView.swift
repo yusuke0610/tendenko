@@ -15,6 +15,7 @@ struct ContentView: View {
         cacheDirectory: AppConfig.cacheDirectory,
         budgetCount: AppConfig.cacheBudgetMeshes)
     @State private var mapServer: MBTilesServer?
+    @State private var glyphServer: GlyphServer?
     @State private var styleURL: URL?
     @State private var center = CLLocationCoordinate2D.kamaishi
     @State private var servedPath: String?
@@ -39,6 +40,7 @@ struct ContentView: View {
             AttributionLabel(attributions: attributions)
         }
         .task {
+            startGlyphServer()
             coordinator.start()
             await presentMap()
             await computeOverlay()
@@ -48,6 +50,19 @@ struct ContentView: View {
                 await presentMap()
                 await computeOverlay()
             }
+        }
+    }
+
+    /// 地名・道路名ラベル用のフォントグリフ (Noto Sans Regular, ADR-0006) をローカル配信する。
+    /// 同梱フォントが見つからない場合はラベルなしで地図自体は表示を続ける (縮退)。
+    private func startGlyphServer() {
+        guard let fontsDir = Bundle.main.url(forResource: "fonts", withExtension: nil) else { return }
+        do {
+            let server = try GlyphServer(fontsDirectory: fontsDir.path)
+            try server.start()
+            glyphServer = server
+        } catch {
+            glyphServer = nil
         }
     }
 
@@ -66,7 +81,7 @@ struct ContentView: View {
             try server.start()
             mapServer = server
             servedPath = path
-            styleURL = OfflineMapStyle.styleURL(serverPort: server.port)
+            styleURL = OfflineMapStyle.styleURL(serverPort: server.port, glyphPort: glyphServer?.port ?? 0)
             if let mesh = coordinator.currentMesh {
                 let c = mesh.bbox.center
                 center = CLLocationCoordinate2D(latitude: c.lat, longitude: c.lon)

@@ -27,7 +27,8 @@ server-test: ## server/ のテストを実行
 server-lint: ## server/ を golangci-lint でチェック
 	cd server && golangci-lint run ./...
 
-pipeline-normalize-data: ## 浸水想定区域 (A40)・避難場所の実データを正規化 GeoJSON に変換 (要: data/a40/*.zip, data/raw/shelters-all.geojson。取得元は ADR-0003)
+pipeline-normalize-data: ## 浸水想定区域 (A40 + 福井県)・避難場所の実データを正規化 GeoJSON に変換 (取得元は ADR-0003)
+	cd pipeline && ./scripts/normalize-fukui.sh
 	cd pipeline && ./scripts/normalize-a40.sh
 	cd pipeline && ./scripts/normalize-shelters.sh
 

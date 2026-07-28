@@ -38,7 +38,11 @@ for zip in data/a40/*.zip; do
   rm -rf "$dir" # 展開済み shp は変換後不要 (ディスク節約)
 done
 
-jq -s '{type: "FeatureCollection", features: [.[].features[]]}' data/a40/*.dissolved.geojson \
+# A40 (44 都道府県) に、A40 欠落県の独自データ (normalize-fukui.sh の出力) があれば加える。
+# 福井県は CC BY 4.0 の独自津波浸水想定を補完する (ADR-0003 追記 2026-07-25)。
+jq -s '{type: "FeatureCollection", features: [.[].features[]]}' \
+  data/a40/*.dissolved.geojson \
+  $(ls data/fukui/fukui.dissolved.geojson 2>/dev/null) \
   > data/inundation-japan.geojson
 
 echo "done: data/inundation-japan.geojson"

@@ -32,6 +32,20 @@ DerivedData/
 *.tfstate.backup
 *.tfvars
 
+# シークレット (予防的。現状コミット対象は無いが、subscriber/fanout 実装時に混入させない)
+# 実際の管理方針は Secret Manager を想定 (ADR 未策定)。
+# 注意: gitignore は行末コメントを解釈しないため、注釈は必ず別行に書く。
+.env
+.env.*
+!.env.example
+# APNs 認証鍵
+*.p8
+# GCP サービスアカウント鍵 (本来は Workload Identity でキーレス)
+*-key.json
+*credentials*.json
+*secret*.json
+*.pem
+
 # 生成物 (地域パッケージ等) と入力データ (OSM 抽出版・DEM キャッシュ)
 /pipeline/out*/
 /pipeline/data/

@@ -3,6 +3,9 @@
   "extends": ["config:recommended"],
   "timezone": "Asia/Tokyo",
   "schedule": ["before 6am on monday"],
+  "nix": {
+    "enabled": true
+  },
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
@@ -10,20 +13,22 @@
     },
     {
       "matchManagers": ["gomod"],
-      "matchFilePaths": ["server/**"],
+      "matchFileNames": ["server/**"],
       "groupName": "Go deps (server)"
     },
     {
       "matchManagers": ["gomod"],
-      "matchFilePaths": ["pipeline/**"],
+      "matchFileNames": ["pipeline/**"],
       "groupName": "Go deps (pipeline)"
     },
     {
       "matchManagers": ["terraform"],
+      "matchDatasources": ["terraform-provider"],
       "groupName": "Terraform providers"
     },
     {
       "matchManagers": ["swift"],
+      "matchFileNames": ["app/TendenkoDomain/Package.swift"],
       "groupName": "Swift packages (TendenkoDomain)"
     },
     {

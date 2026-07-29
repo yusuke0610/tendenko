@@ -15,7 +15,7 @@ jobs:
     name: Go (server + pipeline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: pipeline/go.mod
@@ -41,7 +41,7 @@ jobs:
     name: iOS ドメイン層 (swift test)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test (TendenkoDomain)
         run: make domain-test
 
@@ -49,7 +49,7 @@ jobs:
     name: iOS アプリビルド
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Build (iOS Simulator)

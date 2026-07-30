@@ -21,15 +21,16 @@ tendenko は津波情報をトリガーに高台への避難を最短化する i
 - ドメイン層は `app/TendenkoDomain/` のローカル Swift Package。macOS でもビルドできるため `make domain-test` でシミュレータなしに高速にテストが回る — TDD はまずここで
 - UI 層 (`app/Tendenko/`) は SwiftUI + MapLibre Native (SPM)。アプリターゲットのテストは `make app-test` (要 iOS シミュレータランタイム: `xcodebuild -downloadPlatform iOS`)
 
-## コード規約
+## 責務ごとのルール
 
-- **app/ のドメイン層は純粋関数 + TDD**。経路探索・案内文生成などのロジックは副作用を持たない関数として書き、テストを先に書く
-- **app/ にサーバー・インフラへの依存を持ち込まない**。サーバー側の都合 (API 形状、インフラ構成) がドメイン層に漏れない境界を維持する
-- コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/ja/) (`feat:`, `fix:`, `docs:`, `chore:` 等)
-- **作業は main から作業ブランチ (feature branch) を切って行う**。main に直接コミットしない。ブランチ名は `feat/...`・`fix/...` 等コミットメッセージの prefix に合わせる。作業完了後は PR 経由で main にマージする
-- **`git push` は毎回ユーザーの明示的な承認を得てから行う**。過去に承認されていても次回に持ち越さない (コミットはローカルなので承認不要)
-- Go コードは `make fmt` (gofmt) と golangci-lint (設定はリポジトリ直下の `.golangci.yml`) を通すこと
-- CI (GitHub Actions, `.github/workflows/ci.yml`) は make ターゲットを呼ぶだけの薄いラッパーに保つ。テスト・ビルド手順を workflow に直接書かない
+言語・領域ごとの詳細ルールは `.claude/rules/` に分割している (このファイルが正本を兼ねず内容が分散しないよう、以下は要約ではなく実体への参照)。
+
+- @.claude/rules/go.md — Go (server/, pipeline/) のフォーマット・lint・テスト・実行環境の注意点
+- @.claude/rules/swift.md — Swift/iOS (app/) のプロジェクト構成・ドメイン層 TDD・依存境界
+- @.claude/rules/testing.md — テストコマンドと CI カバレッジの対応表
+- @.claude/rules/contributing.md — ブランチ・コミット・PR・CI/CodeRabbit 対応の運用ルール
+
+CI (GitHub Actions, `.github/workflows/ci.yml`) は make ターゲットを呼ぶだけの薄いラッパーに保つ。テスト・ビルド手順を workflow に直接書かない。
 
 ## 次セッションの最優先タスク
 

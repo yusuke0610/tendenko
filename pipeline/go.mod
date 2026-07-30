@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	cloud.google.com/go/storage v1.64.0
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 )
 
 require (

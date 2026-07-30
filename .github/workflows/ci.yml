@@ -39,7 +39,7 @@ jobs:
 
   domain:
     name: iOS ドメイン層 (swift test)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Test (TendenkoDomain)
@@ -47,7 +47,7 @@ jobs:
 
   app:
     name: iOS アプリビルド
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen

@@ -1,6 +1,39 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["* 0-5 * * 1"],
+  "nix": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["server/**"],
+      "groupName": "Go deps (server)"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["pipeline/**"],
+      "groupName": "Go deps (pipeline)"
+    },
+    {
+      "matchManagers": ["terraform"],
+      "matchDatasources": ["terraform-provider"],
+      "groupName": "Terraform providers"
+    },
+    {
+      "matchManagers": ["swift"],
+      "matchFileNames": ["app/TendenkoDomain/Package.swift"],
+      "groupName": "Swift packages (TendenkoDomain)"
+    },
+    {
+      "matchManagers": ["nix"],
+      "groupName": "Nix flake inputs"
+    }
   ]
 }

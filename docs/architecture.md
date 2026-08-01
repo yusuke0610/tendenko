@@ -25,7 +25,7 @@ flowchart TB
     end
 
     subgraph iphone [iPhone — 実装済み]
-        OSAPI[OS API 層<br>Core Location / MapLibre Native]
+        OSAPI[OS API 層<br>Core Location / MapLibre Native /<br>AVSpeechSynthesizer]
         DOMAIN[ドメイン層 — 純粋関数 + TDD<br>TendenkoDomain / TendenkoStorage]
         UI[UI 層<br>SwiftUI + MapView]
     end
@@ -41,7 +41,7 @@ flowchart TB
 | 領域 | 状態 |
 |---|---|
 | `pipeline/` | ✅ 実装済み。全国 2,515 メッシュ分のパッケージ生成を実測済み ([ADR-0003](adr/0003-region-package-format.md)) |
-| `app/` (ドメイン層・UI層) | ✅ 実装済み。経路探索・地図描画・オフライン配信・地域パッケージの自動DLまで動作確認済み |
+| `app/` (ドメイン層・UI層) | ✅ 実装済み。経路探索・地図描画・オフライン配信・地域パッケージの自動DL・音声案内 (FR-13) まで動作確認済み |
 | `infra/` (OpenTofu) | ✅ 定義済み、**本番 `tofu apply` は未実行** (プロジェクトID未確定) |
 | `server/` (subscriber・fanout) | ❌ **未実装**。`cmd/subscriber/main.go`・`cmd/fanout/main.go` は TODO コメントのみのスタブ |
 
@@ -78,6 +78,7 @@ flowchart TB
 | `RoadGraph.swift` | 道路グラフの型とエッジ属性フラグ (pipelineの`graph.Flag*`とビット割り当てを共有) |
 | `EvacuationRouter.swift` | 経路探索。コストは「最短」ではなく「浸水リスク最小 + 迷いにくさ」(FR-12) |
 | `RouteGeometry.swift` | 経路探索の結果を地図描画用座標に変換 |
+| `GuidanceScript.swift` | 経路 → 音声案内文 (FR-13)。曲がる案内は分岐点でのみ出す ([ADR-0007](adr/0007-voice-guidance.md)) |
 | `EvacuationPhase.swift` | 受信電文からアプリの状態遷移を表す型 (requirements §3.2) |
 | `CachePlanner.swift` | ローリングキャッシュ (現在地 3×3 メッシュ) の保持/退避計画 ([ADR-0004](adr/0004-region-package-delivery.md)) |
 
@@ -98,7 +99,8 @@ flowchart TB
 | ファイル | 責務 |
 |---|---|
 | `TendenkoApp.swift` | アプリのエントリポイント |
-| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・経路オーバーレイ計算の配線 |
+| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・経路オーバーレイ計算・音声案内の配線 |
+| `SpeechAnnouncer.swift` | `AVAudioSession` (.playback/.voicePrompt) + `AVSpeechSynthesizer` で案内文を読み上げる ([ADR-0007](adr/0007-voice-guidance.md)) |
 | `MapView.swift` / `OfflineMapStyle.swift` | MapLibre Nativeのラップとオフラインスタイル定義 (地物・ラベルのレイヤー定義) |
 | `GCSPackageFetcher.swift` | 公開GCSバケットからmanifest・パッケージを取得する `PackageFetcher` の本番実装 |
 | `RegionCacheCoordinator.swift` | 位置監視とキャッシュ更新の配線 (`CachePlanner`をアプリに接続) |

@@ -19,9 +19,17 @@ final class SpeechAnnouncer: NSObject, AVSpeechSynthesizerDelegate {
         synthesizer.delegate = self
     }
 
-    /// 渡された順に続けて読み上げる。読み上げ中に呼ぶと後ろに積まれる。
+    /// 渡された順に続けて読み上げる。
+    ///
+    /// 読み上げ中に呼ばれた場合は現在の読み上げを打ち切って置き換える。`announce` の呼び出しは
+    /// 常に「今の経路の案内」であり、古い案内を最後まで流してから始めるのでは、既に正しくない
+    /// 方向を聞かせることになる (同梱サンプルの案内中に実地域のパッケージ DL が完了した場合など)。
+    /// 打ち切りは `.immediate`。誤った方向の指示を語尾まで言い切る理由がない。
     func announce(_ texts: [String]) {
         guard !texts.isEmpty else { return }
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
         activateSession()
         for text in texts {
             let utterance = AVSpeechUtterance(string: text)

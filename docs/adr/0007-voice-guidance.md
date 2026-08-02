@@ -183,6 +183,23 @@ ADR-0003 (A40・福井県データ) / ADR-0006 (フォントライセンス) と
 
 対処するなら国土地理院の指定緊急避難場所データにふりがな列があるかを確認し、あれば [ADR-0003](0003-region-package-format.md) のスキーマに `name_kana` を追加して pipeline とアプリの両方を直す必要がある (`AVSpeechSynthesisIPANotationAttribute` で読みを与えられる)。元データがローカルに無く未確認。**未着手**。
 
-### 声質の評価はシミュレータではできない
+### 声質の評価はシミュレータではできない — 実測で確定
 
-シミュレータのログには `Error fetching voices: DecodingError.dataCorrupted ... Using fallback voices` が出ており、音声データ自体が揃っていない。「声がロボット的」という印象のうちどこまでが実装由来かは、**実機で聞き直すまで判断できない**。上記 3 点の調整は実機・シミュレータのどちらでも効くが、声質そのものの評価は保留。
+シミュレータのログには `Error fetching voices: DecodingError.dataCorrupted ... Using fallback voices` が出ており、音声データ自体が揃っていない。どこまでが実装由来かを切り分けるため、シミュレータ上で `AVSpeechSynthesisVoice.speechVoices()` を実際に列挙した。
+
+```
+全音声数: 68
+ja-JP 音声数: 1
+  Kyoko | com.apple.voice.super-compact.ja-JP.Kyoko | quality=default
+AVSpeechSynthesisVoice(language: "ja-JP") => 同じ Kyoko
+```
+
+**シミュレータには `super-compact` の Kyoko が 1 つだけ**入っている。`super-compact` は Apple の音声バリアントの中で最も小さく品質が低いもので、「発音が不自然」という印象はこれで説明がつく。
+
+この実測で 3 点が確定した。
+
+- **英語音声で日本語を読んでいるわけではない**。`AVSpeechSynthesisVoice(language:)` は正しく ja-JP の音声を返しており、実装の不具合ではない
+- **本 ADR で決めた「premium > enhanced > default から最良を選ぶ」は正しく動くが、シミュレータでは選択肢が 1 つしかないため効果が出ない**
+- **実機では改善する見込み**。実機の内蔵音声は通常 `compact` (super-compact より上位) で、ユーザーが「設定 > アクセシビリティ > 読み上げコンテンツ > 声」から `enhanced`/`premium` を追加すればさらに良くなる。実装はあれば自動で選ぶ
+
+**結論: 声質・発音についてコード側で追加でできることはない。評価は実機で行う。** 速度 (`rate`) と間 (`postUtteranceDelay`) の調整は両環境で効く。

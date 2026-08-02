@@ -22,6 +22,8 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
 
     private(set) var status: Status = .idle
     private(set) var currentMesh: MeshCode?
+    /// 実測の現在地。メッシュ中心 (約 10km 四方の中心) では経路の始点として粗すぎるため別に持つ。
+    private(set) var currentLocation: GeoPoint?
     /// 現在地メッシュの tiles.mbtiles のローカルパス (取得済みなら)。地図表示に使う。
     private(set) var tilesPath: String?
     /// 現在地メッシュの region.sqlite のローカルパス (取得済みなら)。経路探索に使う。
@@ -44,17 +46,20 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         locationManager.delegate = self
     }
 
-    /// 測位とダウンロードを開始する。配信 URL 未設定なら縮退のまま。
+    /// 測位を開始する。配信 URL が設定されていればパッケージの取得も行う。
+    ///
+    /// **測位はダウンロードの可否と切り離す。** 配信 URL が未設定でも現在地は取得する。
+    /// 現在地が分からないと「この地域の詳細地図はまだありません」(FR-15 の縮退) すら言えず、
+    /// 同梱サンプルの土地にいるかのように振る舞ってしまうため。
     func start() {
-        guard store != nil else {
-            status = .degraded("配信URLが未設定です")
-            return
-        }
-        status = .locating
-        locationManager.desiredAccuracy = kCLLocationAccuracyKilometer
+        // メッシュの判定 (約 10km 四方) だけなら粗くて足りるが、経路の始点に使うので
+        // 10m 級を要求する。1km 誤差の始点から探索すると別の街区から案内が始まりうる。
+        // 常時 GPS ではなく requestLocation の単発測位なので NFR-05 (電池) への影響は小さい。
+        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.requestWhenInUseAuthorization()
         locationManager.startMonitoringSignificantLocationChanges()
         locationManager.requestLocation()
+        status = store == nil ? .degraded("配信URLが未設定です") : .locating
     }
 
     // MARK: - CLLocationManagerDelegate (nonisolated → MainActor へホップ)
@@ -91,11 +96,17 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
     // MARK: - 取得ロジック
 
     private func handle(lat: Double, lon: Double) async {
+        // 現在地はダウンロードの可否に関わらず常に更新する (経路の始点に使う)
+        currentLocation = GeoPoint(lat: lat, lon: lon)
+
         let mesh = MeshCode(latitude: lat, longitude: lon)
         // メッシュが変わっていなければ (かつ取得済みなら) 何もしない
         if mesh == currentMesh, tilesPath != nil { return }
         currentMesh = mesh
-        guard let store else { return }
+        guard let store else {
+            status = .degraded("配信URLが未設定です")
+            return
+        }
 
         status = .downloading
         do {

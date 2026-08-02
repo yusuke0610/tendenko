@@ -109,3 +109,37 @@
 - **理由**: 配信物は OSM 由来の道路グラフ (region.sqlite) を含み、**ODbL share-alike 義務の整理が [ADR-0002](0002-oss-licensing.md) / [docs/licenses.md](../licenses.md) で未決のまま残っている** (ADR-0003 の「正直な弱点」でも既知)。バケットを world-public (allUsers:objectViewer) にすることは「公開配布」に相当し、その未解決の義務を発火させる。ライセンス整理より先に技術都合で公開してしまうのを避ける
 - **決定**: `infra/` の `google_storage_bucket.packages` は `public_access_prevention = "enforced"` + `uniform_bucket_level_access = true` で作り、allUsers を付けない。パイプラインは自分の SA 権限 (`roles/storage.objectAdmin`) でアップロードできる。app からの取得 (認証なしの URLSession) はこの制約を解除してから繋ぐ
 - **帰結**: FR-02 の app 配線 (Task) は、(a) ODbL 整理を済ませて world-public 化する、または (b) 署名付き URL / 認証付き取得にする、のいずれかを先に決める必要がある。この選択は app 実装セッションで扱う。infra はローカル state で bootstrap し、`tofu init` / `validate` まで通ることを確認済み (`plan`/`apply` は project_id と認証が必要)
+
+## 追記 (2026-08-02): 測位はパッケージ取得の可否と切り離す
+
+FR-02 の app 配線 (`RegionCacheCoordinator`) は、測位開始を配信 URL の設定有無で塞いでいた。
+
+```swift
+func start() {
+    guard store != nil else {              // AppConfig.packagesBaseURL == nil → store == nil
+        status = .degraded("配信URLが未設定です")
+        return                             // ← 測位に到達しない
+    }
+    locationManager.requestWhenInUseAuthorization()
+    ...
+}
+```
+
+`AppConfig.packagesBaseURL` は上記ブロッカーが解けるまで `nil` のままなので、**アプリは実際には一度も測位していなかった**。位置情報の許可ダイアログすら出ず、`currentMesh` は nil のまま、経路の始点は `ContentView` の固定値 (釜石 39.29/141.94) が使われ続けていた。実機で確認するまで気づけない種類の不具合で、ログにも痕跡が残らない (CLLocationManager が一切呼ばれないため)。
+
+### 決定
+
+**測位はダウンロードの可否と独立させる。** 配信 URL が未設定でも `start()` は測位を開始し、ダウンロードだけを `store` の有無で分岐する。
+
+理由は、現在地が分からないと FR-15 の縮退モード (「この地域の詳細地図はまだありません」+ コンパス案内) の判定自体が成立しないこと。現在地不明とパッケージ未取得は別の状態であり、後者で前者を代用すると「同梱サンプルの土地にいる」という誤った前提で動く。
+
+あわせて 2 点直した。
+
+- **`desiredAccuracy` を `kCLLocationAccuracyKilometer` → `kCLLocationAccuracyNearestTenMeters`**。メッシュ選択 (約 10km 四方) には 1km 精度で足りるが、経路の始点には粗すぎる。1km ずれた地点から探索すると別の街区から案内が始まる。常時 GPS ではなく `requestLocation()` の単発測位なので NFR-05 (平時の常駐消費 1 日 2% 未満) への影響は小さいと判断した
+- **`currentLocation` (実測値) を `currentMesh` と別に持つ**。従来 `ContentView.startPoint()` は `mesh.bbox.center` を返しており、これは 2 次メッシュ (約 10km 四方) の中心なので、測位できていても最大 7km ずれた始点で経路を引くことになっていた
+
+### 正直な弱点
+
+**現在地を経路の始点に使うのは、その現在地を含む地域パッケージを読み込めているときだけ**とした。同梱サンプル (釜石) にフォールバックしている状態で実際の現在地から探索すると、`RouteGeometry.nearestNode` が釜石グラフ上のどこかに丸め、まったく無関係な経路を返すため。
+
+つまり配信 URL 未設定の間は、測位はするが経路は依然サンプルの土地のものになる。**本来ここは FR-15 の縮退モードに入るべき場面で、それは未実装**。縮退している事実は `StatusBanner` で画面に出すようにしたが、根本解決は FR-15 の実装を待つ。

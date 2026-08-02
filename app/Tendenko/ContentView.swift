@@ -42,6 +42,13 @@ struct ContentView: View {
             // 表示中パッケージの meta から出典を組み立てる (per-package)。
             AttributionLabel(attributions: attributions)
         }
+        // 縮退している事実を隠さない。現在地が取れない・その地域のパッケージが無い、を黙って
+        // サンプル表示にすり替えると、実データが出ていると誤解させる (ADR-0004 / FR-15)。
+        .overlay(alignment: .top) {
+            if case .degraded(let message) = coordinator.status {
+                StatusBanner(message: message)
+            }
+        }
         .task {
             startGlyphServer()
             coordinator.start()
@@ -53,6 +60,10 @@ struct ContentView: View {
                 await presentMap()
                 await computeOverlay()
             }
+        }
+        // 測位はパッケージ取得と独立して走るので、現在地が届いた時点でも経路を引き直す
+        .onChange(of: coordinator.currentLocation) { _, _ in
+            Task { await computeOverlay() }
         }
     }
 
@@ -144,13 +155,18 @@ struct ContentView: View {
         announcer.announce(opening + overlay.guidance.prefix(2).map(\.text))
     }
 
-    /// 経路の始点 (現在地メッシュの中心。未測位なら釜石サンプルの中心)。
+    /// 経路の始点。
+    ///
+    /// 現在地を使えるのは、その現在地を含む地域パッケージを実際に読み込めているときだけ。
+    /// 同梱サンプル (釜石) にフォールバックしている状態で実際の現在地から探索すると、
+    /// グラフ上の最近傍ノードが釜石のどこかに丸められ、まったく無関係な経路が出てしまう。
+    /// パッケージが無い地域では現在地を捨ててサンプルの土地を案内する — 実データが来るまでの
+    /// デモであることを崩さないための割り切りで、本来は FR-15 の縮退モードに入るべき場面。
     private func startPoint() -> GeoPoint {
-        if let mesh = coordinator.currentMesh {
-            let c = mesh.bbox.center
-            return GeoPoint(lat: c.lat, lon: c.lon)
+        guard coordinator.regionPath != nil, let location = coordinator.currentLocation else {
+            return .kamaishiSample
         }
-        return GeoPoint(lat: 39.29, lon: 141.94)
+        return location
     }
 }
 
@@ -162,6 +178,20 @@ private struct Overlay: Sendable {
     let guidance: [GuidanceStep]
     /// 経路が見つからなければ nil
     let summary: String?
+}
+
+/// 縮退状態 (現在地が取れない・配信 URL 未設定・その地域のパッケージが無い) の告知。
+private struct StatusBanner: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.top, 8)
+    }
 }
 
 /// OSM (ODbL) と各データソースの帰属表示 (ADR-0002 / docs/licenses.md)。
@@ -188,4 +218,9 @@ private struct AttributionLabel: View {
 private extension CLLocationCoordinate2D {
     /// 釜石メッシュ (584177) の中心付近。開発用サンプルデータの表示位置。
     static let kamaishi = CLLocationCoordinate2D(latitude: 39.29, longitude: 141.94)
+}
+
+private extension GeoPoint {
+    /// 同梱サンプル (釜石 584177) の想定現在地。配信 URL 未設定時のデモ用。
+    static let kamaishiSample = GeoPoint(lat: 39.29, lon: 141.94)
 }

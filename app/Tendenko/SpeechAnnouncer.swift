@@ -33,9 +33,36 @@ final class SpeechAnnouncer: NSObject, AVSpeechSynthesizerDelegate {
         activateSession()
         for text in texts {
             let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
+            utterance.voice = Self.japaneseVoice
             utterance.volume = 1.0
+            // 既定 (0.5) は歩きながら聞くにはやや速い。落としすぎると間延びして
+            // かえって聞き取りにくいので 1 割程度に留める
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.9
+            // 指示と指示の間に息を入れる。続けて流すと 1 文に聞こえて切れ目が分からない
+            utterance.postUtteranceDelay = 0.4
             synthesizer.speak(utterance)
+        }
+    }
+
+    /// 利用可能な中で最も品質の高い日本語音声。
+    ///
+    /// `AVSpeechSynthesisVoice(language:)` は既定 (compact) を返す。enhanced/premium は
+    /// ユーザーが「設定 > アクセシビリティ > 読み上げコンテンツ > 声」で追加したときだけ
+    /// 存在するので、あれば使う。無ければ compact に落ちる。
+    /// なお **シミュレータでは音声データ自体が揃っておらず** (`Using fallback voices` が出る)、
+    /// 声質の評価は実機で行う必要がある。
+    private static let japaneseVoice: AVSpeechSynthesisVoice? = {
+        let japanese = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "ja-JP" }
+        let best = japanese.max { rank($0.quality) < rank($1.quality) }
+        return best ?? AVSpeechSynthesisVoice(language: "ja-JP")
+    }()
+
+    private static func rank(_ quality: AVSpeechSynthesisVoiceQuality) -> Int {
+        switch quality {
+        case .premium: return 3
+        case .enhanced: return 2
+        case .default: return 1
+        @unknown default: return 0
         }
     }
 

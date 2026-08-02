@@ -66,6 +66,8 @@ public struct GuidanceStyle: Sendable {
     public var coarseDistanceM: Double = 100
     public var fineStepM: Double = 10
     public var coarseStepM: Double = 50
+    /// これ以上はメートルではなくキロで読み上げる。「3000メートル」は耳で捉えにくい
+    public var kilometerThresholdM: Double = 1000
 
     public init() {}
 }
@@ -245,39 +247,48 @@ public enum GuidanceScript {
 
     private static func text(for maneuver: Maneuver, distanceM: Double,
                              style: GuidanceStyle) -> String {
-        let lead = distanceText(distanceM, style: style).map { "\($0)進んで、" } ?? ""
+        // カーナビと同じ「距離 → 動作」の語順にする。先に距離を言うほうが身構えられる
+        let lead = distanceText(distanceM, style: style).map { "\($0)先、" } ?? "この先、"
 
         switch maneuver {
         case .start(let bearingDeg):
-            return "\(compassName(bearingDeg))の方向へ歩き出してください"
+            return "\(compassName(bearingDeg))に向かって進んでください"
         case .turn(let direction):
             return lead + turnText(direction)
         case .climb:
-            return lead + "この坂を登り切ってください"
+            return lead + "上り坂が続きます。登り切ってください"
         case .steps:
             return lead + "階段を上ります"
         case .arrive(let shelterName):
             let place = shelterName ?? "避難場所"
             guard let distance = distanceText(distanceM, style: style) else {
-                return "\(place)に到着しています。その場に留まってください"
+                return "\(place)に到着しました。その場に留まってください"
             }
-            return "\(distance)先、\(place)に到着します。到着したらその場に留まってください"
+            return "\(distance)先、\(place)に到着します。到着したら、その場に留まってください"
         }
     }
 
     private static func turnText(_ direction: TurnDirection) -> String {
         switch direction {
-        case .right: return "次の角を右です"
-        case .left: return "次の角を左です"
-        case .slightRight: return "やや右に進みます"
-        case .slightLeft: return "やや左に進みます"
-        case .sharpRight: return "折り返すように右へ進みます"
-        case .sharpLeft: return "折り返すように左へ進みます"
+        case .right: return "右に曲がります"
+        case .left: return "左に曲がります"
+        case .slightRight: return "右方向です"
+        case .slightLeft: return "左方向です"
+        case .sharpRight: return "折り返すように右です"
+        case .sharpLeft: return "折り返すように左です"
         }
     }
 
-    /// 音声で読み上げるための距離。丸めて 0 になる距離は言わない (「3メートル進んで」は案内にならない)。
+    /// 音声で読み上げるための距離。丸めて 0 になる距離は言わない (「3メートル」は案内にならない)。
+    /// 1km 以上はキロで読む — 「3000メートル」は数字が大きすぎて耳で距離感に変換できない。
     private static func distanceText(_ distanceM: Double, style: GuidanceStyle) -> String? {
+        if distanceM >= style.kilometerThresholdM {
+            let km = (distanceM / 100).rounded() / 10 // 0.1km 単位
+            let value = km.truncatingRemainder(dividingBy: 1) == 0
+                ? String(Int(km))
+                : String(format: "%.1f", km)
+            return value + "キロ"
+        }
         let unit = distanceM < style.coarseDistanceM ? style.fineStepM : style.coarseStepM
         let rounded = (distanceM / unit).rounded() * unit
         guard rounded > 0 else { return nil }

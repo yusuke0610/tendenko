@@ -23,6 +23,9 @@ struct ContentView: View {
     @State private var routePolyline: [GeoPoint] = []
     @State private var inundationSegments: [[GeoPoint]] = []
     @State private var attributions: [String] = ["OpenStreetMap contributors", "国土地理院"]
+    @State private var announcer = SpeechAnnouncer()
+    /// 発話済みの案内。同じ経路で再計算が走っても読み上げ直さないためのガード
+    @State private var announcedGuidance: [GuidanceStep] = []
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -91,34 +94,54 @@ struct ContentView: View {
         }
     }
 
-    /// 現在地メッシュの region.sqlite から避難経路と浸水エッジを計算してオーバーレイに渡す。
-    /// 読込 + 探索はバックグラウンドで行う (RoadGraph は Sendable)。結果が無ければ何もしない。
+    /// 現在地メッシュの region.sqlite から避難経路・浸水エッジ・音声案内を計算する。
+    /// 読込 + 探索 + 案内文生成はすべて純粋処理なのでバックグラウンドで行う (RoadGraph は Sendable)。
     private func computeOverlay() async {
         let regionPath = coordinator.regionPath
             ?? Bundle.main.path(forResource: "region-584177", ofType: "sqlite")
         guard let regionPath else { return }
         let start = startPoint()
 
-        let result = await Task.detached { () -> ([GeoPoint], [[GeoPoint]], [String])? in
+        let result = await Task.detached { () -> Overlay? in
             guard let graph = try? GraphLoader.load(paths: [regionPath]),
                   let shelters = try? ShelterLoader.load(paths: [regionPath]),
                   let startNode = RouteGeometry.nearestNode(to: start, in: graph)
             else { return nil }
-            // 避難場所を goal ノードに丸め、最小コスト経路を 1 本求める (FR-12)
-            let goals = Set(shelters.compactMap { RouteGeometry.nearestNode(to: $0.point, in: graph) })
-            let route = EvacuationRouter.route(graph: graph, from: startNode, goals: goals)
-            let line = route.map { RouteGeometry.polyline($0, in: graph) } ?? []
-            let inundation = RouteGeometry.inundationSegments(in: graph)
-            // 表示中パッケージの出典 (帰属表示、ADR-0002)。古いパッケージは空。
-            let attrs = (try? MetaLoader.attributions(path: regionPath)) ?? []
-            return (line, inundation, attrs)
+            // 避難場所を goal ノードに丸め、最小コスト経路を 1 本求める (FR-12)。
+            // どの避難場所に着いたかを案内文で言えるよう、丸めたノード → 避難場所も控える
+            var sheltersByNode: [Int64: Shelter] = [:]
+            for shelter in shelters {
+                guard let node = RouteGeometry.nearestNode(to: shelter.point, in: graph) else { continue }
+                sheltersByNode[node] = shelter
+            }
+            let route = EvacuationRouter.route(graph: graph, from: startNode,
+                                               goals: Set(sheltersByNode.keys))
+            let destination = route?.nodeIDs.last.flatMap { sheltersByNode[$0] }
+            return Overlay(
+                polyline: route.map { RouteGeometry.polyline($0, in: graph) } ?? [],
+                inundation: RouteGeometry.inundationSegments(in: graph),
+                // 表示中パッケージの出典 (帰属表示、ADR-0002)。古いパッケージは空。
+                attributions: (try? MetaLoader.attributions(path: regionPath)) ?? [],
+                guidance: route.map {
+                    GuidanceScript.steps(for: $0, in: graph, destination: destination)
+                } ?? [],
+                summary: route.map { GuidanceScript.summary(for: $0, destination: destination) })
         }.value
 
-        if let (line, inundation, attrs) = result {
-            routePolyline = line
-            inundationSegments = inundation
-            if !attrs.isEmpty { attributions = attrs }
-        }
+        guard let result else { return }
+        routePolyline = result.polyline
+        inundationSegments = result.inundation
+        if !result.attributions.isEmpty { attributions = result.attributions }
+        announce(result)
+    }
+
+    /// 経路が確定したら概要と最初の指示を読み上げる (FR-13)。
+    /// 位置に追従して残りを順次読み上げるのは FR-14/FR-16 と合わせて実装する。
+    private func announce(_ overlay: Overlay) {
+        guard !overlay.guidance.isEmpty, overlay.guidance != announcedGuidance else { return }
+        announcedGuidance = overlay.guidance
+        let opening = overlay.summary.map { [$0] } ?? []
+        announcer.announce(opening + overlay.guidance.prefix(2).map(\.text))
     }
 
     /// 経路の始点 (現在地メッシュの中心。未測位なら釜石サンプルの中心)。
@@ -129,6 +152,16 @@ struct ContentView: View {
         }
         return GeoPoint(lat: 39.29, lon: 141.94)
     }
+}
+
+/// バックグラウンドで計算した表示・発話用の一式。純粋な値だけを運ぶ (Sendable)。
+private struct Overlay: Sendable {
+    let polyline: [GeoPoint]
+    let inundation: [[GeoPoint]]
+    let attributions: [String]
+    let guidance: [GuidanceStep]
+    /// 経路が見つからなければ nil
+    let summary: String?
 }
 
 /// OSM (ODbL) と各データソースの帰属表示 (ADR-0002 / docs/licenses.md)。

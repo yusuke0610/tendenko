@@ -123,15 +123,29 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
 
         // 経路の始点に使えるのは、十分な精度で、かつ古すぎない測位だけ。
         // 粗い測位でもメッシュの判定 (約 10km 四方) には使えるので、そちらは下で続行する。
-        if accuracyM <= Self.routeOriginAccuracyM, age <= Self.routeOriginMaxAge {
-            currentLocation = GeoPoint(lat: lat, lon: lon)
-        }
+        let origin: GeoPoint? = (accuracyM <= Self.routeOriginAccuracyM
+            && age <= Self.routeOriginMaxAge) ? GeoPoint(lat: lat, lon: lon) : nil
 
         let mesh = MeshCode(latitude: lat, longitude: lon)
-        // メッシュが変わっていなければ (かつ取得済みなら) 何もしない
-        if mesh == currentMesh, tilesPath != nil { return }
-        currentMesh = mesh
+        if mesh == currentMesh {
+            // 同じメッシュなら、公開済みのパッケージと組み合わせて問題ない
+            if let origin { currentLocation = origin }
+            if tilesPath != nil { return }
+        } else {
+            // **メッシュが変わったら、まず公開済みのパッケージを無効化する。**
+            // 新しい現在地を先に公開すると、次のパッケージが届くまでの間、
+            // 旧メッシュのグラフ上で新しい現在地から経路を引いてしまう。
+            // 現在地とパッケージは常に同じメッシュのものを組で公開する。
+            currentMesh = mesh
+            currentLocation = nil
+            regionPath = nil
+            tilesPath = nil
+        }
+
         guard let store else {
+            // 配信先が無い場合はパッケージと組むことがない (regionPath は常に nil) ので、
+            // 現在地はそのまま公開してよい
+            if let origin { currentLocation = origin }
             status = .degraded("配信URLが未設定です")
             return
         }
@@ -150,6 +164,8 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
 
             regionPath = await store.regionPath(for: mesh)
             tilesPath = await store.tilesPath(for: mesh)
+            // 現在地はパッケージが揃ってから公開する (上の無効化と対になる)
+            if let origin { currentLocation = origin }
             // manifest に無い内陸メッシュ等はパッケージが無い → 縮退 (FR-15)
             status = tilesPath != nil ? .ready : .degraded("この地域の詳細地図はまだありません")
         } catch {

@@ -187,7 +187,7 @@ ADR-0003 (A40・福井県データ) / ADR-0006 (フォントライセンス) と
 
 シミュレータのログには `Error fetching voices: DecodingError.dataCorrupted ... Using fallback voices` が出ており、音声データ自体が揃っていない。どこまでが実装由来かを切り分けるため、シミュレータ上で `AVSpeechSynthesisVoice.speechVoices()` を実際に列挙した。
 
-```
+```text
 全音声数: 68
 ja-JP 音声数: 1
   Kyoko | com.apple.voice.super-compact.ja-JP.Kyoko | quality=default

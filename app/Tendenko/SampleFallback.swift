@@ -1,4 +1,5 @@
 import Foundation
+import TendenkoDomain
 
 /// 同梱サンプル (釜石 584177) にフォールバックしている間の扱い (ADR-0004 追記)。
 ///
@@ -23,9 +24,26 @@ enum SampleFallback {
         regionPath != nil
     }
 
-    /// 縮退バナーに出す文言。サンプル表示中はその事実と、音声を出さないことを添える。
-    static func bannerMessage(statusMessage: String, regionPath: String?) -> String {
-        guard regionPath == nil else { return statusMessage }
+    /// 縮退バナーに出す文言。サンプルを実際に出しているときだけ、その事実と音声を出さない旨を添える。
+    /// フォールバックが無効なら地図自体が出ないので、サンプルの話をしてはいけない。
+    static func bannerMessage(statusMessage: String, regionPath: String?, enabled: Bool) -> String {
+        guard shouldPresentSample(regionPath: regionPath, enabled: enabled) else {
+            return statusMessage
+        }
         return statusMessage + "（表示中の経路はサンプルです。音声案内は行いません）"
+    }
+}
+
+/// 経路の始点の決定 (ADR-0004 追記)。
+///
+/// 現在地とパッケージは**同じメッシュのものが組で揃っているときだけ**組み合わせてよい。
+/// 片方だけ新しい状態で経路を引くと、別の地域のグラフ上で最近傍ノードに丸められ、
+/// 無関係な経路が出る。`RegionCacheCoordinator` はメッシュ遷移時に両方を無効化するので、
+/// ここでは「両方揃っているか」だけを見れば足りる。
+enum RouteOrigin {
+    static func resolve(regionPath: String?, currentLocation: GeoPoint?,
+                        sample: GeoPoint) -> GeoPoint {
+        guard regionPath != nil, let currentLocation else { return sample }
+        return currentLocation
     }
 }

@@ -47,7 +47,8 @@ struct ContentView: View {
         .overlay(alignment: .top) {
             if case .degraded(let message) = coordinator.status {
                 StatusBanner(message: SampleFallback.bannerMessage(
-                    statusMessage: message, regionPath: coordinator.regionPath))
+                    statusMessage: message, regionPath: coordinator.regionPath,
+                    enabled: AppConfig.sampleFallbackEnabled))
             }
         }
         .task {
@@ -174,18 +175,11 @@ struct ContentView: View {
         return Bundle.main.path(forResource: resource, ofType: ext)
     }
 
-    /// 経路の始点。
-    ///
-    /// 現在地を使えるのは、その現在地を含む地域パッケージを実際に読み込めているときだけ。
-    /// 同梱サンプル (釜石) にフォールバックしている状態で実際の現在地から探索すると、
-    /// グラフ上の最近傍ノードが釜石のどこかに丸められ、まったく無関係な経路が出てしまう。
-    /// パッケージが無い地域では現在地を捨ててサンプルの土地を案内する — 実データが来るまでの
-    /// デモであることを崩さないための割り切りで、本来は FR-15 の縮退モードに入るべき場面。
+    /// 経路の始点。判断は `RouteOrigin` に切り出してテストしている。
     private func startPoint() -> GeoPoint {
-        guard coordinator.regionPath != nil, let location = coordinator.currentLocation else {
-            return .kamaishiSample
-        }
-        return location
+        RouteOrigin.resolve(regionPath: coordinator.regionPath,
+                            currentLocation: coordinator.currentLocation,
+                            sample: .kamaishiSample)
     }
 }
 

@@ -39,6 +39,76 @@ public enum RouteGeometry {
         return segments
     }
 
+    /// 点から折れ線までの最短距離 (m)。経路からの逸脱判定 (FR-14) に使う。
+    /// 折れ線が空なら無限遠を返す (経路が無い状態は「常に逸脱」として扱えるようにする)。
+    public static func distanceToPolylineM(_ point: GeoPoint, polyline: [GeoPoint]) -> Double {
+        guard let first = polyline.first else { return .infinity }
+        guard polyline.count > 1 else { return point.distanceM(to: first) }
+
+        var best = Double.infinity
+        for i in 0..<(polyline.count - 1) {
+            best = min(best, distanceToSegmentM(point, polyline[i], polyline[i + 1]))
+        }
+        return best
+    }
+
+    /// 点を経路上に射影したときの、経路の始点からの道なり距離 (m)。
+    ///
+    /// 「どこまで進んだか」を測る唯一の基準。案内地点との直線距離で進行を判定すると、
+    /// 通り過ぎた指示を飛ばせず (遠ざかると近さの条件を満たさない)、進行が止まる。
+    public static func progressAlongPolylineM(_ point: GeoPoint, polyline: [GeoPoint]) -> Double {
+        guard polyline.count > 1 else { return 0 }
+
+        var traveled = 0.0
+        var bestDistance = Double.infinity
+        var bestProgress = 0.0
+
+        for i in 0..<(polyline.count - 1) {
+            let a = polyline[i], b = polyline[i + 1]
+            let segmentLength = a.distanceM(to: b)
+            let (distance, t) = distanceAndProjection(point, a, b)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestProgress = traveled + segmentLength * t
+            }
+            traveled += segmentLength
+        }
+        return bestProgress
+    }
+
+    /// 点から線分までの距離 (m)。線分は数十〜数百 m なので、線分の中点を原点とする
+    /// 局所平面 (東西を cos(lat) 補正) に射影して計算する。地球半径は haversine と揃える。
+    private static func distanceToSegmentM(_ p: GeoPoint, _ a: GeoPoint, _ b: GeoPoint) -> Double {
+        distanceAndProjection(p, a, b).distanceM
+    }
+
+    /// 点から線分までの距離 (m) と、線分上の射影位置 (0…1)。
+    /// 線分は数十〜数百 m なので、線分の始点を原点とする局所平面 (東西を cos(lat) 補正) で計算する。
+    /// 地球半径は haversine と揃えてあるので、道なり距離との整合が取れる。
+    private static func distanceAndProjection(_ p: GeoPoint, _ a: GeoPoint,
+                                              _ b: GeoPoint) -> (distanceM: Double, t: Double) {
+        let lat0 = (a.lat + b.lat) / 2 * .pi / 180
+        let mPerDegLat = GeoPoint.earthRadiusM * .pi / 180
+        let mPerDegLon = mPerDegLat * cos(lat0)
+
+        func project(_ q: GeoPoint) -> (x: Double, y: Double) {
+            ((q.lon - a.lon) * mPerDegLon, (q.lat - a.lat) * mPerDegLat)
+        }
+        let pv = project(p), bv = project(b)
+
+        let lengthSquared = bv.x * bv.x + bv.y * bv.y
+        // 線分が潰れている (同一点) 場合は端点までの距離
+        guard lengthSquared > 0 else { return (p.distanceM(to: a), 0) }
+
+        // 線分上への射影を [0,1] に丸める。範囲外なら最寄りの端点が最短になる
+        var t = (pv.x * bv.x + pv.y * bv.y) / lengthSquared
+        t = min(max(t, 0), 1)
+
+        let dx = pv.x - bv.x * t
+        let dy = pv.y - bv.y * t
+        return ((dx * dx + dy * dy).squareRoot(), t)
+    }
+
     /// 経度は緯度が高いほど狭まるため cos(lat) で補正した平面近似の二乗距離。
     /// 最近傍の選択にしか使わないので厳密な測地線距離は不要。
     private static func squaredDistance(_ a: GeoPoint, _ b: GeoPoint) -> Double {

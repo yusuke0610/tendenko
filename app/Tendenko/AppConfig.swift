@@ -12,6 +12,14 @@ enum AppConfig {
     /// 公開パッケージを配置してから、ここに URL を設定して有効化する。
     static let packagesBaseURL: URL? = nil
 
+    /// 現在地のパッケージが無いときに同梱サンプル (釜石 584177) を表示するか。
+    ///
+    /// **開発中の動作確認用。** サンプルの経路は現在地と無関係なので、有効な間は音声案内を
+    /// 行わず、バナーでサンプルである旨を告知する ([`SampleFallback`](SampleFallback.swift))。
+    /// リリース時は false にし、FR-15 の縮退モード (浸水域の外周方向 + 最寄り避難場所への
+    /// コンパス案内) に置き換える。
+    static let sampleFallbackEnabled = true
+
     /// ローリングキャッシュに保持するメッシュ数の上限 (ADR-0004。実機計測で調整)。
     static let cacheBudgetMeshes = 32
 

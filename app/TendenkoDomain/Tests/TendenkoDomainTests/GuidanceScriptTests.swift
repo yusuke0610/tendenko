@@ -200,6 +200,43 @@ struct GuidanceScriptTests {
         #expect(steps[1].text.contains("350メートル")) // 337 → 350
     }
 
+    @Test("1km 以上はメートルではなくキロで読み上げる")
+    func longDistanceUsesKilometers() {
+        // 「3000メートル」は数字が大きすぎて耳で距離感に変換できない
+        let g = graph([edge(1, 2, bearing: 0, lengthM: 3000),
+                       edge(2, 3, bearing: 90, lengthM: 10), branch(at: 2)])
+        let steps = GuidanceScript.steps(for: route([1, 2, 3]), in: g, destination: nil)
+        #expect(steps[1].text.contains("3キロ"))
+        #expect(!steps[1].text.contains("メートル"))
+    }
+
+    @Test("キロは 0.1 刻みで読み、小数点以下が 0 なら整数で読む")
+    func kilometerRounding() {
+        #expect(GuidanceScript.summary(for: route([1], lengthM: 5479), destination: nil)
+            .contains("5.5キロ"))
+        #expect(GuidanceScript.summary(for: route([1], lengthM: 1950), destination: nil)
+            .contains("2キロ"))
+        #expect(GuidanceScript.summary(for: route([1], lengthM: 1234), destination: nil)
+            .contains("1.2キロ"))
+    }
+
+    @Test("1km 未満はメートルのまま読む (境界)")
+    func belowOneKilometerStaysMeters() {
+        #expect(GuidanceScript.summary(for: route([1], lengthM: 950), destination: nil)
+            .contains("950メートル"))
+        #expect(GuidanceScript.summary(for: route([1], lengthM: 1000), destination: nil)
+            .contains("1キロ"))
+    }
+
+    @Test("丸めた結果が 1km に届く距離はキロで読む (999m が 1000メートル にならない)")
+    func roundingUpToOneKilometerSwitchesUnit() {
+        // 999m は 50m 単位に丸めると 1000m。ここでメートルのまま読むと「1000メートル」と
+        // 4 桁になり、キロ表記に切り替える意味が無くなる
+        let text = GuidanceScript.summary(for: route([1], lengthM: 999), destination: nil)
+        #expect(text.contains("1キロ"))
+        #expect(!text.contains("メートル"))
+    }
+
     @Test("丸めて 0 になる距離は読み上げから省く")
     func negligibleDistanceOmitted() {
         // 3m 進んですぐ曲がる。「3メートル進んで」は案内として無意味
@@ -222,7 +259,7 @@ struct GuidanceScriptTests {
             let g = graph([edge(1, 2, bearing: bearing)])
             let steps = GuidanceScript.steps(for: route([1, 2]), in: g, destination: nil)
             // 「北」が「北東」に、「東」が「南東」に一致してしまわないよう先頭で照合する
-            #expect(steps[0].text.hasPrefix(name + "の方向"), "bearing \(bearing) は「\(name)」")
+            #expect(steps[0].text.hasPrefix(name + "に向かって"), "bearing \(bearing) は「\(name)」")
         }
     }
 
@@ -230,15 +267,15 @@ struct GuidanceScriptTests {
     func compassRoundsToNearest() {
         let g = graph([edge(1, 2, bearing: 20)]) // 北東 (45) より北 (0) に近い
         #expect(GuidanceScript.steps(for: route([1, 2]), in: g, destination: nil)[0]
-            .text.hasPrefix("北の方向"))
+            .text.hasPrefix("北に向かって"))
 
         let ne = graph([edge(1, 2, bearing: 30)]) // 北 (0) より北東 (45) に近い
         #expect(GuidanceScript.steps(for: route([1, 2]), in: ne, destination: nil)[0]
-            .text.hasPrefix("北東の方向"))
+            .text.hasPrefix("北東に向かって"))
 
         let n = graph([edge(1, 2, bearing: 350)]) // 0 度をまたいで北
         #expect(GuidanceScript.steps(for: route([1, 2]), in: n, destination: nil)[0]
-            .text.hasPrefix("北の方向"))
+            .text.hasPrefix("北に向かって"))
     }
 
     @Test("到達案内に避難場所の名前を入れる")

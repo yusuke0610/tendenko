@@ -109,3 +109,53 @@
 - **理由**: 配信物は OSM 由来の道路グラフ (region.sqlite) を含み、**ODbL share-alike 義務の整理が [ADR-0002](0002-oss-licensing.md) / [docs/licenses.md](../licenses.md) で未決のまま残っている** (ADR-0003 の「正直な弱点」でも既知)。バケットを world-public (allUsers:objectViewer) にすることは「公開配布」に相当し、その未解決の義務を発火させる。ライセンス整理より先に技術都合で公開してしまうのを避ける
 - **決定**: `infra/` の `google_storage_bucket.packages` は `public_access_prevention = "enforced"` + `uniform_bucket_level_access = true` で作り、allUsers を付けない。パイプラインは自分の SA 権限 (`roles/storage.objectAdmin`) でアップロードできる。app からの取得 (認証なしの URLSession) はこの制約を解除してから繋ぐ
 - **帰結**: FR-02 の app 配線 (Task) は、(a) ODbL 整理を済ませて world-public 化する、または (b) 署名付き URL / 認証付き取得にする、のいずれかを先に決める必要がある。この選択は app 実装セッションで扱う。infra はローカル state で bootstrap し、`tofu init` / `validate` まで通ることを確認済み (`plan`/`apply` は project_id と認証が必要)
+
+## 追記 (2026-08-02): 測位はパッケージ取得の可否と切り離す
+
+FR-02 の app 配線 (`RegionCacheCoordinator`) は、測位開始を配信 URL の設定有無で塞いでいた。
+
+```swift
+func start() {
+    guard store != nil else {              // AppConfig.packagesBaseURL == nil → store == nil
+        status = .degraded("配信URLが未設定です")
+        return                             // ← 測位に到達しない
+    }
+    locationManager.requestWhenInUseAuthorization()
+    ...
+}
+```
+
+`AppConfig.packagesBaseURL` は上記ブロッカーが解けるまで `nil` のままなので、**アプリは実際には一度も測位していなかった**。位置情報の許可ダイアログすら出ず、`currentMesh` は nil のまま、経路の始点は `ContentView` の固定値 (釜石 39.29/141.94) が使われ続けていた。実機で確認するまで気づけない種類の不具合で、ログにも痕跡が残らない (CLLocationManager が一切呼ばれないため)。
+
+### 決定
+
+**測位はダウンロードの可否と独立させる。** 配信 URL が未設定でも `start()` は測位を開始し、ダウンロードだけを `store` の有無で分岐する。
+
+理由は、現在地が分からないと FR-15 の縮退モード (「この地域の詳細地図はまだありません」+ コンパス案内) の判定自体が成立しないこと。現在地不明とパッケージ未取得は別の状態であり、後者で前者を代用すると「同梱サンプルの土地にいる」という誤った前提で動く。
+
+あわせて 2 点直した。
+
+- **`desiredAccuracy` を `kCLLocationAccuracyKilometer` → `kCLLocationAccuracyNearestTenMeters`**。メッシュ選択 (約 10km 四方) には 1km 精度で足りるが、経路の始点には粗すぎる。1km ずれた地点から探索すると別の街区から案内が始まる
+- **測位の精度と鮮度を検証してから経路の始点に使う**。`desiredAccuracy` は要求であって保証ではなく、とくに significant location change の配信は数百 m 級で届く。水平精度 100m 以内かつ 120 秒以内の測位だけを `currentLocation` に採用し、それ以外は捨てる。粗い測位でもメッシュの判定には使えるのでそちらは続行する
+- **`startMonitoringSignificantLocationChanges()` は配信 URL があるときだけ登録する**。これは移動先のパッケージを先読みするための常時監視 (FR-03) で、先読みする配信先が無い状態では常駐と再起動のコストだけが残る。`requestLocation()` の単発測位と違い**アプリを再起動させうる継続サービス**なので、NFR-05 (平時の常駐消費 1 日 2% 未満) の観点でも縮退時は登録しない
+- **非同期の取得完了は測位のリビジョンで照合する**。ダウンロード中に次の測位が届いていた場合、完了した古いメッシュのパッケージを公開すると地図と経路が現在地とずれたまま確定する。`ContentView` 側も経路計算の結果を書き戻す前に現在地とパッケージが変わっていないか確かめる
+- **現在地とパッケージは常に同じメッシュのものを組で公開する**。メッシュが変わった時点で `currentLocation` と `regionPath` / `tilesPath` を同時に無効化し、新しいパッケージが揃ってから現在地を公開し直す。新しい現在地だけを先に公開すると、次のパッケージが届くまでの間、**旧メッシュのグラフ上で新しい現在地から経路を引く**。リビジョン照合だけではこれを防げない — 照合対象がどちらも旧パッケージのパスなので、ガードを通過してしまう。経路の始点を決める `RouteOrigin.resolve` は「両方揃っているか」だけを見る純粋関数として切り出し、`make app-test` で検証する
+- **`currentLocation` (実測値) を `currentMesh` と別に持つ**。従来 `ContentView.startPoint()` は `mesh.bbox.center` を返しており、これは 2 次メッシュ (約 10km 四方) の中心なので、測位できていても最大 7km ずれた始点で経路を引くことになっていた
+
+### 正直な弱点
+
+**現在地を経路の始点に使うのは、その現在地を含む地域パッケージを読み込めているときだけ**とした。同梱サンプル (釜石) にフォールバックしている状態で実際の現在地から探索すると、`RouteGeometry.nearestNode` が釜石グラフ上のどこかに丸め、まったく無関係な経路を返すため。
+
+つまり配信 URL 未設定の間は、測位はするが経路は依然サンプルの土地のものになる。**本来ここは FR-15 の縮退モードに入るべき場面で、それは未実装**。縮退している事実は `StatusBanner` で画面に出すようにしたが、根本解決は FR-15 の実装を待つ。
+
+### 追記 (2026-08-04): サンプル経路は描いても読み上げない
+
+上の「正直な弱点」で「配信 URL 未設定の間は経路がサンプルの土地のものになる」と書いたが、**その経路を音声でも読み上げていた**。レビューでの指摘を受けて止めた。
+
+地図に描くことと読み上げることは危険度が違う。地図は一目でサンプルと分かり無視もできるが、音声は無関係な方向を断定的に指示してしまい、避難時に取り消しが効かない。requirements.md §3.3 のとおり本アプリは公式警報の後追いで避難準備を整える係であり、誤った方向を能動的に告げるのはその位置づけを踏み越える。
+
+- 判断は `app/Tendenko/SampleFallback.swift` に純粋関数として切り出し、`app/TendenkoTests` で回帰テストを置いた (`make app-test`)。`ContentView` (SwiftUI View) の中に埋めるとテストできず、一番落としたくない性質を守れない
+- サンプルへのフォールバック自体も `AppConfig.sampleFallbackEnabled` で明示的にした。開発用の機能であることをコード上で宣言し、リリース時に false にする対象をはっきりさせる
+- バナーには「表示中の経路はサンプルです。音声案内は行いません」を添える
+
+根本解決は変わらず FR-15 の縮退モード (浸水域の外周方向 + 最寄り避難場所へのコンパス案内) の実装。

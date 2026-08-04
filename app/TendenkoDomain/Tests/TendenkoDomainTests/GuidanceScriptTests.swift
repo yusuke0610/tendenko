@@ -228,6 +228,15 @@ struct GuidanceScriptTests {
             .contains("1キロ"))
     }
 
+    @Test("丸めた結果が 1km に届く距離はキロで読む (999m が 1000メートル にならない)")
+    func roundingUpToOneKilometerSwitchesUnit() {
+        // 999m は 50m 単位に丸めると 1000m。ここでメートルのまま読むと「1000メートル」と
+        // 4 桁になり、キロ表記に切り替える意味が無くなる
+        let text = GuidanceScript.summary(for: route([1], lengthM: 999), destination: nil)
+        #expect(text.contains("1キロ"))
+        #expect(!text.contains("メートル"))
+    }
+
     @Test("丸めて 0 になる距離は読み上げから省く")
     func negligibleDistanceOmitted() {
         // 3m 進んですぐ曲がる。「3メートル進んで」は案内として無意味

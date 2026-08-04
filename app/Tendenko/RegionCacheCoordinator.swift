@@ -32,6 +32,15 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
     private let store: RegionPackageStore?
     private let budgetCount: Int
     private let locationManager = CLLocationManager()
+    /// 測位が届くたびに増える。非同期の取得完了時に「まだ最新か」を確かめるのに使う
+    private var locationRevision = 0
+
+    /// 経路の始点として受け入れる水平精度の上限 (m)。
+    /// significant location change の配信は数百 m 級で届くことがあり、それを始点にすると
+    /// 別の街区から案内が始まる。メッシュ判定 (約 10km 四方) には粗い測位でも足りる。
+    private static let routeOriginAccuracyM: CLLocationAccuracy = 100
+    /// 経路の始点として受け入れる測位の古さの上限 (秒)。キャッシュされた古い位置を掴まない
+    private static let routeOriginMaxAge: TimeInterval = 120
 
     /// - Parameter baseURL: 配信ベース URL。nil なら DL せず縮退 (同梱サンプルにフォールバック)。
     init(baseURL: URL?, cacheDirectory: URL, budgetCount: Int) {
@@ -57,18 +66,27 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         // 常時 GPS ではなく requestLocation の単発測位なので NFR-05 (電池) への影響は小さい。
         locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.requestWhenInUseAuthorization()
-        locationManager.startMonitoringSignificantLocationChanges()
         locationManager.requestLocation()
+        // significant location change は「移動先のパッケージを先読みする」ための常時監視 (FR-03)。
+        // 先読みする配信先が無い状態で登録しても、常駐と再起動のコストだけが残る。
+        // requestLocation の単発測位と違い、これはアプリを再起動させうる継続サービスである。
+        if store != nil {
+            locationManager.startMonitoringSignificantLocationChanges()
+        }
         status = store == nil ? .degraded("配信URLが未設定です") : .locating
     }
 
     // MARK: - CLLocationManagerDelegate (nonisolated → MainActor へホップ)
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let coordinate = locations.last?.coordinate else { return }
-        let lat = coordinate.latitude
-        let lon = coordinate.longitude
-        Task { @MainActor in await self.handle(lat: lat, lon: lon) }
+        guard let location = locations.last else { return }
+        let lat = location.coordinate.latitude
+        let lon = location.coordinate.longitude
+        let accuracyM = location.horizontalAccuracy
+        let age = -location.timestamp.timeIntervalSinceNow
+        Task { @MainActor in
+            await self.handle(lat: lat, lon: lon, accuracyM: accuracyM, age: age)
+        }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -95,9 +113,19 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
 
     // MARK: - 取得ロジック
 
-    private func handle(lat: Double, lon: Double) async {
-        // 現在地はダウンロードの可否に関わらず常に更新する (経路の始点に使う)
-        currentLocation = GeoPoint(lat: lat, lon: lon)
+    private func handle(lat: Double, lon: Double, accuracyM: CLLocationAccuracy,
+                        age: TimeInterval) async {
+        // horizontalAccuracy が負の測位は無効値 (CoreLocation の規約)
+        guard accuracyM >= 0 else { return }
+
+        locationRevision += 1
+        let revision = locationRevision
+
+        // 経路の始点に使えるのは、十分な精度で、かつ古すぎない測位だけ。
+        // 粗い測位でもメッシュの判定 (約 10km 四方) には使えるので、そちらは下で続行する。
+        if accuracyM <= Self.routeOriginAccuracyM, age <= Self.routeOriginMaxAge {
+            currentLocation = GeoPoint(lat: lat, lon: lon)
+        }
 
         let mesh = MeshCode(latitude: lat, longitude: lon)
         // メッシュが変わっていなければ (かつ取得済みなら) 何もしない
@@ -116,11 +144,16 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
             try await store.ensure(meshes: plan.toFetch)
             await store.evict(plan.toEvict)
 
+            // ダウンロード中に次の測位が届いていたら、この結果はもう現在地のものではない。
+            // 古いメッシュのパッケージを公開すると、地図と経路が現在地とずれたまま確定する。
+            guard revision == locationRevision else { return }
+
             regionPath = await store.regionPath(for: mesh)
             tilesPath = await store.tilesPath(for: mesh)
             // manifest に無い内陸メッシュ等はパッケージが無い → 縮退 (FR-15)
             status = tilesPath != nil ? .ready : .degraded("この地域の詳細地図はまだありません")
         } catch {
+            guard revision == locationRevision else { return }
             status = .degraded("地図パッケージのダウンロードに失敗しました")
         }
     }

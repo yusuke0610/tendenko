@@ -282,17 +282,21 @@ public enum GuidanceScript {
     /// 音声で読み上げるための距離。丸めて 0 になる距離は言わない (「3メートル」は案内にならない)。
     /// 1km 以上はキロで読む — 「3000メートル」は数字が大きすぎて耳で距離感に変換できない。
     private static func distanceText(_ distanceM: Double, style: GuidanceStyle) -> String? {
-        if distanceM >= style.kilometerThresholdM {
+        let unit = distanceM < style.coarseDistanceM ? style.fineStepM : style.coarseStepM
+        let roundedM = (distanceM / unit).rounded() * unit
+
+        // 単位は「丸めたあとの値」で決める。999m を先にメートル側と判定すると、丸めた結果が
+        // 1000メートル になり、キロ表記に切り替える目的 (4 桁を読ませない) が失われる。
+        // 読み上げる数値そのものは生の距離から出す (メートル丸め → キロ丸めの二重丸めを避ける)。
+        if roundedM >= style.kilometerThresholdM {
             let km = (distanceM / 100).rounded() / 10 // 0.1km 単位
             let value = km.truncatingRemainder(dividingBy: 1) == 0
                 ? String(Int(km))
                 : String(format: "%.1f", km)
             return value + "キロ"
         }
-        let unit = distanceM < style.coarseDistanceM ? style.fineStepM : style.coarseStepM
-        let rounded = (distanceM / unit).rounded() * unit
-        guard rounded > 0 else { return nil }
-        return "\(Int(rounded))メートル"
+        guard roundedM > 0 else { return nil }
+        return "\(Int(roundedM))メートル"
     }
 
     private static let compassNames = ["北", "北東", "東", "南東", "南", "南西", "西", "北西"]

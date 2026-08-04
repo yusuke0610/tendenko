@@ -46,7 +46,8 @@ struct ContentView: View {
         // サンプル表示にすり替えると、実データが出ていると誤解させる (ADR-0004 / FR-15)。
         .overlay(alignment: .top) {
             if case .degraded(let message) = coordinator.status {
-                StatusBanner(message: message)
+                StatusBanner(message: SampleFallback.bannerMessage(
+                    statusMessage: message, regionPath: coordinator.regionPath))
             }
         }
         .task {
@@ -80,10 +81,10 @@ struct ContentView: View {
         }
     }
 
-    /// 現在地パッケージがあればそれを、無ければ同梱サンプルを配信して表示する。
+    /// 現在地パッケージがあればそれを、無ければ (明示的に許可されていれば) 同梱サンプルを配信する。
     private func presentMap() async {
-        let path = coordinator.tilesPath
-            ?? Bundle.main.path(forResource: "tiles-584177", ofType: "mbtiles")
+        let path = coordinator.tilesPath ?? bundledSamplePath(resource: "tiles-584177",
+                                                              extension: "mbtiles")
         guard let path else {
             loadError = "地図パッケージが見つかりません"
             return
@@ -108,10 +109,13 @@ struct ContentView: View {
     /// 現在地メッシュの region.sqlite から避難経路・浸水エッジ・音声案内を計算する。
     /// 読込 + 探索 + 案内文生成はすべて純粋処理なのでバックグラウンドで行う (RoadGraph は Sendable)。
     private func computeOverlay() async {
-        let regionPath = coordinator.regionPath
-            ?? Bundle.main.path(forResource: "region-584177", ofType: "sqlite")
+        let regionPath = coordinator.regionPath ?? bundledSamplePath(resource: "region-584177",
+                                                                     extension: "sqlite")
         guard let regionPath else { return }
         let start = startPoint()
+        // 計算中に現在地やパッケージが変われば、この結果は古い。書き戻す前に照合する
+        let requestedRegion = coordinator.regionPath
+        let requestedLocation = coordinator.currentLocation
 
         let result = await Task.detached { () -> Overlay? in
             guard let graph = try? GraphLoader.load(paths: [regionPath]),
@@ -140,6 +144,11 @@ struct ContentView: View {
         }.value
 
         guard let result else { return }
+        // 探索中に現在地やパッケージが差し替わっていたら、この経路はもう現在地のものではない。
+        // 古い経路を地図に出したまま確定させると、避難中に別の場所の経路を見せることになる
+        guard coordinator.regionPath == requestedRegion,
+              coordinator.currentLocation == requestedLocation
+        else { return }
         routePolyline = result.polyline
         inundationSegments = result.inundation
         if !result.attributions.isEmpty { attributions = result.attributions }
@@ -149,10 +158,20 @@ struct ContentView: View {
     /// 経路が確定したら概要と最初の指示を読み上げる (FR-13)。
     /// 位置に追従して残りを順次読み上げるのは FR-14/FR-16 と合わせて実装する。
     private func announce(_ overlay: Overlay) {
+        // 同梱サンプルの経路は現在地と無関係なので読み上げない (SampleFallback 参照)
+        guard SampleFallback.shouldAnnounce(regionPath: coordinator.regionPath) else { return }
         guard !overlay.guidance.isEmpty, overlay.guidance != announcedGuidance else { return }
         announcedGuidance = overlay.guidance
         let opening = overlay.summary.map { [$0] } ?? []
         announcer.announce(opening + overlay.guidance.prefix(2).map(\.text))
+    }
+
+    /// 同梱サンプルのパス。フォールバックが明示的に有効なときだけ返す (AppConfig)。
+    private func bundledSamplePath(resource: String, extension ext: String) -> String? {
+        guard SampleFallback.shouldPresentSample(regionPath: coordinator.regionPath,
+                                                 enabled: AppConfig.sampleFallbackEnabled)
+        else { return nil }
+        return Bundle.main.path(forResource: resource, ofType: ext)
     }
 
     /// 経路の始点。

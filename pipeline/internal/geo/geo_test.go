@@ -14,6 +14,14 @@ func TestDistanceM(t *testing.T) {
 	if DistanceM(39.25, 141.875, 39.25, 141.875) != 0 {
 		t.Error("同一点の距離は 0")
 	}
+	// 対蹠点に近いと haversine の中間値が丸め誤差で 1 を超え、クランプが無いと NaN になる
+	antipodal := DistanceM(0.0074, 141.9, -0.0074, -38.1)
+	if math.IsNaN(antipodal) {
+		t.Fatal("対蹠点の距離が NaN")
+	}
+	if math.Abs(antipodal-math.Pi*earthRadiusM) > 1 {
+		t.Errorf("対蹠点の距離 = %.1fm, want ≈%.1fm", antipodal, math.Pi*earthRadiusM)
+	}
 }
 
 func TestBearingDeg(t *testing.T) {

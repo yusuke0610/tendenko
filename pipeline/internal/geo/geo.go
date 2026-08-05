@@ -11,6 +11,9 @@ func DistanceM(lat1, lon1, lat2, lon2 float64) float64 {
 	dφ := (lat2 - lat1) * math.Pi / 180
 	dλ := (lon2 - lon1) * math.Pi / 180
 	a := math.Sin(dφ/2)*math.Sin(dφ/2) + math.Cos(φ1)*math.Cos(φ2)*math.Sin(dλ/2)*math.Sin(dλ/2)
+	// a は理論上 0…1 だが、対蹠点に近いと丸め誤差で 1 をわずかに超え、math.Sqrt(1-a) が NaN になる。
+	// 端末側の GeoPoint.distanceM と同じ式を保つため、クランプもこちらに揃える
+	a = math.Min(math.Max(a, 0), 1)
 	return earthRadiusM * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 

@@ -24,7 +24,10 @@ extension GeoPoint {
         let dLambda = (other.lon - lon) * .pi / 180
         let a = sin(dPhi / 2) * sin(dPhi / 2)
             + cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2)
-        return Self.earthRadiusM * 2 * atan2(a.squareRoot(), (1 - a).squareRoot())
+        // a は理論上 0…1 だが、対蹠点に近いと丸め誤差で 1 をわずかに超え、(1 - a) の平方根が NaN になる。
+        // 距離が NaN になると逸脱判定・到達判定が両方とも偽になり、案内が黙って停止する
+        let clamped = min(max(a, 0), 1)
+        return Self.earthRadiusM * 2 * atan2(clamped.squareRoot(), (1 - clamped).squareRoot())
     }
 }
 

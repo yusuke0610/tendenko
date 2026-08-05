@@ -270,6 +270,24 @@ struct RouteTrackerTests {
         #expect(abs(state.progressM - 111) < 5)
     }
 
+    @Test("測位が後ろに揺れても進行は戻らない")
+    func progressNeverGoesBackwards() {
+        // 111m 地点まで進んだあと、その線分の始点 (0m) へ揺れ戻った測位。窓は前回位置が乗る
+        // 線分を含むので射影自体は 0m を返しうるが、進行として採るのは前回のまま
+        let state = RouteTracker.track(location: p(0), steps: steps, polyline: straightLine,
+                                       fromStepIndex: 1, fromProgressM: 111)
+        #expect(abs(state.progressM - 111) < 5)
+        #expect(state.stepIndex == 1)
+    }
+
+    @Test("経路が空でも進行は前回の値を保つ")
+    func keepsProgressWithoutPolyline() {
+        let state = RouteTracker.track(location: p(0), steps: steps, polyline: [],
+                                       fromStepIndex: 1, fromProgressM: 111)
+        #expect(state.progressM == 111)
+        #expect(state.isOffRoute) // 経路が無い状態は常に逸脱 (リルートの起点)
+    }
+
     @Test("窓を広げると九十九折りをまたいだ最近傍を拾う (窓が効いていることの裏取り)")
     func windowIsConfigurable() {
         var style = TrackingStyle()

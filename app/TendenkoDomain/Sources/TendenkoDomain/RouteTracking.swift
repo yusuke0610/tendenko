@@ -27,7 +27,7 @@ public struct TrackingState: Sendable, Equatable {
     /// 次の案内地点までの残距離 (m)。次が無ければ nil。
     /// 区間が長いときの進捗案内 (「あと◯◯メートル」) に使える
     public let distanceToNextStepM: Double?
-    /// 経路上に射影した現在地の、経路始点からの道なり距離 (m)。
+    /// 経路上に射影した現在地の、経路始点からの道なり距離 (m)。`stepIndex` と同じく後戻りしない。
     /// **次の更新でそのまま `fromProgressM` に渡す** — 進行を探す範囲をここから決める
     public let progressM: Double
 
@@ -105,6 +105,10 @@ public enum RouteTracker {
     ///
     /// ただし窓の中に**許容幅以内の区間が無ければ**全体の最近傍に戻す。バックグラウンド復帰などで
     /// 大きく進んだ場合に、経路上にいるのに進行が窓の縁で止まって案内が動かなくなるのを防ぐ。
+    ///
+    /// 結果は前回の進行より手前には戻さない。窓は前回位置が乗る線分を含む (境界に接する線分は
+    /// 候補に入る) ので、測位が線分の始点側に揺れると射影が後ろに出る。`stepIndex` と同じく
+    /// 進行も単調にしておかないと、呼び出し側が次に渡す窓が後退して意味が揺らぐ。
     private static func progressM(of location: GeoPoint, polyline: [GeoPoint],
                                   from fromProgressM: Double,
                                   nearest: RouteGeometry.Projection?,
@@ -113,9 +117,9 @@ public enum RouteTracker {
         let window = previous...(previous + style.progressWindowM)
         if let windowed = RouteGeometry.project(location, onto: polyline, searchRangeM: window),
            windowed.distanceM <= style.offRouteToleranceM {
-            return windowed.progressM
+            return max(previous, windowed.progressM)
         }
-        return nearest?.progressM ?? 0
+        return max(previous, nearest?.progressM ?? previous)
     }
 
     /// 各案内地点の道なり距離 (m)。案内は経路の順に並ぶので、頂点を前から順に消費して対応付ける。

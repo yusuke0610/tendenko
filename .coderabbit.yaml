@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit (AI コードレビュー) の設定。
+# レビュー運用の正本は .claude/rules/contributing.md / CONTRIBUTING.md 側にあり、
+# このファイルは「どう指摘させるか」だけを定義する。
+
+# レビューコメント・要約・walkthrough をすべて日本語で出力する。
+language: "ja-JP"
+
+# 口調。断定的な説明より、根拠と代替案を添えた指摘を優先させる。
+tone_instructions: "日本語で、簡潔かつ具体的に指摘してください。指摘には理由と修正案を必ず添え、単なる好みの差は指摘しないでください。敬体 (です・ます) で書いてください。"
+
+early_access: false
+
+reviews:
+  # chill = 明確な問題に絞る / assertive = 細かい点も拾う。
+  # 個人開発でノイズを増やしたくないため chill。
+  profile: "chill"
+
+  # 指摘があっても "Request changes" でブロックしない (マージ判断は人間が行う)。
+  request_changes_workflow: false
+
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+
+  # 詩は不要。
+  poem: false
+
+  # PR がクローズされたら進行中のレビューを中断する。
+  abort_on_close: true
+
+  auto_review:
+    enabled: true
+    # push のたびに差分だけを追加レビューする。
+    auto_incremental_review: true
+    # draft PR はレビューしない (作業途中の指摘を避ける)。
+    drafts: false
+    base_branches:
+      - "main"
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
+
+  # レビュー対象外。生成物・バイナリ・ロックファイルは差分を読ませない。
+  path_filters:
+    - "!app/Tendenko/Resources/fonts/**"
+    - "!app/Tendenko/Resources/*.sqlite"
+    - "!app/Tendenko/Resources/*.mbtiles"
+    - "!**/*.pbf"
+    - "!**/go.sum"
+    - "!flake.lock"
+
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Go (server/, pipeline/) のレビュー方針:
+        - server/go.mod と pipeline/go.mod は独立した module。片方の都合をもう片方に持ち込む変更は指摘する。
+        - フォーマットは gofmt、lint は リポジトリ直下の .golangci.yml が正本。設定を各ディレクトリに複製する変更は指摘する。
+        - errcheck の除外リスト (defer での Close/Rollback 等) に該当する新規 defer があれば、除外要否の検討を促す。
+        - app/ (Swift ドメイン層) の都合が API 形状やデータフォーマット以外の形で漏れていないか確認する。
+
+    - path: "pipeline/**"
+      instructions: |
+        pipeline/ は GDAL・osmium・tilemaker などの外部ツールに依存し、tilemaker (-tiles) は Linux 専用 (ADR-0003)。
+        macOS でしか動かない前提や、Cloud Run jobs (Linux コンテナ) で壊れる前提が入っていないか確認する。
+
+    - path: "app/TendenkoDomain/**/*.swift"
+      instructions: |
+        ドメイン層は「純粋関数 + TDD」が原則:
+        - 経路探索・案内文生成などのロジックに副作用 (I/O、時刻取得、乱数、グローバル状態) が混ざっていないか指摘する。
+        - 新規ロジックに対応するテストが同じ PR に含まれているか確認する (make domain-test で回る範囲)。
+        - UIKit/SwiftUI、ネットワーク、サーバー・インフラへの依存を持ち込む変更は境界違反として指摘する。
+        - Swift 6.0 / iOS 17.0 以降が対象。並行処理は Swift 6 の厳格な並行性チェックを満たすか確認する。
+
+    - path: "app/Tendenko/**/*.swift"
+      instructions: |
+        UI 層 (SwiftUI + MapLibre Native) のレビュー方針:
+        - ロジックはドメイン層 (TendenkoDomain) に置くべきものが UI 層に染み出していないか確認する。
+        - 位置情報は NFR-05 により平時の常時測位を禁じている。startUpdatingLocation 等の連続測位を追加する変更は、
+          有効化される条件 (案内フェーズ中に限定されているか) と停止処理があるかを必ず確認する。
+        - make app-test は CI で実行されない。UI の振る舞いを変える変更には、シミュレータでの手動確認が必要な旨を指摘してよい。
+
+    - path: "app/project.yml"
+      instructions: |
+        Xcode プロジェクトの正本は project.yml (XcodeGen)。Tendenko.xcodeproj は生成物でコミットしない。
+        ディレクトリ構造を保つ必要のあるリソース (フォントグリフ等) は type: folder の folder reference になっているか確認する
+        (個別ファイル参照だとバンドルルートにフラット化され、相対パス参照が壊れる)。
+        MapLibre は from: 6.0.0 でピン留めしており Renovate の管理対象外なので、更新は手動である点を踏まえてレビューする。
+
+    - path: ".github/workflows/**"
+      instructions: |
+        CI は make ターゲットを呼ぶだけの薄いラッパーに保つ (CLAUDE.md)。
+        ビルド・テスト・lint の手順を workflow に直接書く変更は、Makefile 側へ寄せるよう指摘する。
+
+    - path: "Makefile"
+      instructions: |
+        実行方法の正本は Makefile。全ターゲットは nix develop 内で実行される (SHELL = scripts/nix-bash.sh) 前提。
+        新規ターゲットには ## のヘルプコメント (make help に出る) が付いているか確認する。
+
+    - path: "flake.nix"
+      instructions: |
+        開発環境の正本は flake.nix。ツールの追加・更新はここで行う (Swift/Xcode だけは macOS の Xcode 前提で Nix 管理外)。
+        README や CI に直接ツールをインストールする変更があれば flake.nix へ寄せるよう指摘する。
+
+    - path: "infra/**"
+      instructions: |
+        OpenTofu の構成。実際に課金・不可逆な操作を伴うリソース (Cloud Run jobs、GCS バケット) の変更は影響範囲を明示する。
+        認証情報・プロジェクト ID・バケット名などがハードコードされていないか確認する
+        (サービスアカウント鍵ではなく Workload Identity によるキーレスが前提)。
+
+    - path: "**/*.sh"
+      instructions: |
+        シェルスクリプトは set -euo pipefail 相当のエラーハンドリングがあるか、変数展開が適切にクォートされているか確認する。
+        外部データを取得するスクリプトは、取得元とライセンスが ADR に記録されているか確認する。
+
+    - path: "docs/adr/**/*.md"
+      instructions: |
+        ADR は第三者がデューデリジェンスできる品質を維持する。
+        決定の背景・検討した選択肢・トレードオフ・却下した理由が省略されていないか確認する。
+        結論だけが書かれていて根拠が欠けている場合は指摘する。
+
+    - path: "**/*.md"
+      instructions: |
+        ビルド・テスト・lint のコマンドをドキュメントに直接書かない (正本は Makefile)。
+        `make <target>` を参照する形になっているか確認する。
+        アーキテクチャ・データフォーマット・依存関係・ライセンスに関する決定は docs/adr/ の ADR に記録されているか確認する。
+
+  tools:
+    # リポジトリに設定の正本があるもの・設定不要で誤検知の少ないものだけ有効にする。
+    golangci-lint:
+      enabled: true # 設定はリポジトリ直下の .golangci.yml
+    actionlint:
+      enabled: true # .github/workflows/
+    shellcheck:
+      enabled: true # scripts/, pipeline/scripts/
+    hadolint:
+      enabled: true # Dockerfile
+    checkov:
+      enabled: true # infra/ (OpenTofu)
+    gitleaks:
+      enabled: true # 資格情報の混入検知 (.gitignore の予防的除外と同じ意図)
+
+    # 以下はリポジトリに設定の正本が無く、既定ルールでのノイズが大きいため無効。
+    # 有効化するなら、まず設定ファイルをリポジトリに追加して正本を作ること。
+    swiftlint:
+      enabled: false
+    markdownlint:
+      enabled: false
+    yamllint:
+      enabled: false
+    languagetool:
+      enabled: false # 文書が日本語主体のため
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: "auto"
+  issues:
+    scope: "auto"

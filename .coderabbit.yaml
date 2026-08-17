@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit 設定（設定項目の正本: https://docs.coderabbit.ai/reference/configuration）
+# まずは最小構成として、レビューコメント・サマリの出力言語のみ日本語に固定する。
+# CodeRabbit 指摘への対応フロー（3 周までのループ・取得経路）は
+# .claude/rules/contributing.md が正本。
+language: "ja-JP"

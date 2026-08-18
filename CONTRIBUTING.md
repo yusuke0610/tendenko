@@ -53,6 +53,7 @@ Swift/Xcode だけは例外で Nix では管理しません。iOS アプリ (`ap
 - CI (`.github/workflows/ci.yml`) は make ターゲットを呼ぶだけの薄いラッパーです。Go (server + pipeline)・iOS ドメイン層・iOS アプリビルドの3ジョブが `pull_request` で走ります
 - PRを作成・更新したら、CIのステータスと CodeRabbit のレビューコメントの両方を確認してください。指摘が残っている間は「確認 → 妥当性を判断 → 必要なら修正してコミット・push → 再確認」を、両方グリーンになるまで繰り返します
 - CodeRabbit の指摘は鵜呑みにせず、妥当性を判断してから対応してください。的外れな指摘は理由を添えて却下して構いません
+- CodeRabbit の設定の正本はリポジトリ直下の `.coderabbit.yaml` です。レビューは日本語 (`language: ja-JP`) で行われます。パスごとのレビュー方針 (`path_instructions`) は本ファイルや `.claude/rules/` のルールを反映しているので、ルールを変えたときは `.coderabbit.yaml` も合わせて更新してください
 
 ## ライセンス
 

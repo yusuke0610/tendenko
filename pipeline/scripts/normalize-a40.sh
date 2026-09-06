@@ -31,11 +31,11 @@ if [ ! -f "$denylist_file" ]; then
   echo "error: $denylist_file がありません (再配布制限県を判定できません)" >&2
   exit 1
 fi
-denylist=$(grep -oE '^[0-9]{2}' "$denylist_file" | tr '\n' ' ')
-if [ -z "$denylist" ]; then
+if ! denylist_lines=$(grep -oE '^[0-9]{2}' "$denylist_file"); then
   echo "error: $denylist_file から都道府県コードを読み取れませんでした (形式を確認してください)" >&2
   exit 1
 fi
+denylist=$(printf '%s\n' "$denylist_lines" | tr '\n' ' ')
 echo "再配布制限県 denylist: $denylist"
 if [ "${A40_INCLUDE_RESTRICTED:-}" = "1" ]; then
   echo "warning: A40_INCLUDE_RESTRICTED=1 — 再配布制限県も含めます (公開配布には使わないこと)"

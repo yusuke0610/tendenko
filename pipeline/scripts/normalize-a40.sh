@@ -26,7 +26,17 @@ rm -f data/a40/*.dissolved.geojson
 
 # 再配布制限県のコードを denylist から読む (公開配布パッケージから除外、ADR-0002)。
 # A40_INCLUDE_RESTRICTED=1 なら全県を含める (開発・ローカル検証用)。
-denylist=$(grep -oE '^[0-9]{2}' scripts/a40-redistribution-denylist.txt | tr '\n' ' ')
+denylist_file=scripts/a40-redistribution-denylist.txt
+if [ ! -f "$denylist_file" ]; then
+  echo "error: $denylist_file がありません (再配布制限県を判定できません)" >&2
+  exit 1
+fi
+denylist=$(grep -oE '^[0-9]{2}' "$denylist_file" | tr '\n' ' ')
+if [ -z "$denylist" ]; then
+  echo "error: $denylist_file から都道府県コードを読み取れませんでした (形式を確認してください)" >&2
+  exit 1
+fi
+echo "再配布制限県 denylist: $denylist"
 if [ "${A40_INCLUDE_RESTRICTED:-}" = "1" ]; then
   echo "warning: A40_INCLUDE_RESTRICTED=1 — 再配布制限県も含めます (公開配布には使わないこと)"
   denylist=""

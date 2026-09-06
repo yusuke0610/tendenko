@@ -3,7 +3,7 @@ module github.com/yusuke0610/tendenko/pipeline
 go 1.25.0
 
 require (
-	cloud.google.com/go/storage v1.66.0
+	cloud.google.com/go/storage v1.67.0
 	modernc.org/sqlite v1.58.0
 )
 

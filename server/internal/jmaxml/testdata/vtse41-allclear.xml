@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>津波警報・注意報・予報</Title>
+    <DateTime>2026-09-08T15:04:05Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>気象庁本庁</EditorialOffice>
+    <PublishingOffice>気象庁</PublishingOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>津波警報・注意報・予報</Title>
+    <ReportDateTime>2026-09-09T00:04:00+09:00</ReportDateTime>
+    <TargetDateTime>2026-09-09T00:04:00+09:00</TargetDateTime>
+    <EventID>20260908213000</EventID>
+    <InfoType>発表</InfoType>
+    <Serial>7</Serial>
+    <InfoKind>津波警報・注意報・予報</InfoKind>
+    <InfoKindVersion>1.1_0</InfoKindVersion>
+    <Headline>
+      <Text>津波警報・注意報を解除しました。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/">
+    <Tsunami>
+      <Forecast>
+        <Item>
+          <Area>
+            <Name>岩手県</Name>
+            <Code>212</Code>
+          </Area>
+          <Category>
+            <Kind>
+              <Name>津波警報解除</Name>
+              <Code>00</Code>
+            </Kind>
+          </Category>
+        </Item>
+        <Item>
+          <Area>
+            <Name>宮城県</Name>
+            <Code>222</Code>
+          </Area>
+          <Category>
+            <Kind>
+              <Name>津波注意報解除</Name>
+              <Code>00</Code>
+            </Kind>
+          </Category>
+        </Item>
+      </Forecast>
+    </Tsunami>
+  </Body>
+</Report>

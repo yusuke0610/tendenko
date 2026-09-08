@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>津波情報</Title>
+    <DateTime>2026-09-08T12:40:00Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>気象庁本庁</EditorialOffice>
+    <PublishingOffice>気象庁</PublishingOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>各地の津波の到達予想時刻・予想される津波の高さに関する情報</Title>
+    <ReportDateTime>2026-09-08T21:40:00+09:00</ReportDateTime>
+    <TargetDateTime>2026-09-08T21:40:00+09:00</TargetDateTime>
+    <EventID>20260908213000</EventID>
+    <InfoType>発表</InfoType>
+    <Serial>2</Serial>
+    <InfoKind>津波情報</InfoKind>
+    <InfoKindVersion>1.0_0</InfoKindVersion>
+    <Headline>
+      <Text>各地の津波の到達予想時刻をお知らせします。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/" xmlns:jmx_eb="http://xml.kishou.go.jp/jmaxml1/elementBasis1/">
+    <Tsunami>
+      <Estimation>
+        <Item>
+          <Area>
+            <Name>岩手県</Name>
+            <Code>212</Code>
+          </Area>
+          <FirstHeight>
+            <ArrivalTime>2026-09-08T21:50:00+09:00</ArrivalTime>
+          </FirstHeight>
+          <MaxHeight>
+            <jmx_eb:TsunamiHeight type="津波の高さ" unit="m" description="10m超">10</jmx_eb:TsunamiHeight>
+          </MaxHeight>
+        </Item>
+      </Estimation>
+    </Tsunami>
+  </Body>
+</Report>

@@ -1,0 +1,171 @@
+# ADR-0008: subscriber は気象庁 XML を自前パースし、取りこぼしはデデュープと ATOM バックフィルで防ぐ
+
+- ステータス: Accepted
+- 日付: 2026-09-08
+- プロジェクト: tendenko
+
+## コンテキスト
+
+`server/cmd/subscriber` は requirements.md §3 のトリガー仕様を実現する起点であり、これが動かなければ FR-11 (通知タップで即案内) も #25 の fanout も成立しない。しかし現状は `fmt.Println("tendenko subscriber: not implemented yet")` のスタブで、`server/` モジュールには依存が 1 つも無い。
+
+ADR-0001 は実行基盤 (Cloud Run) を決めたが、**subscriber の内部設計 — 何を受け取り、どう解析し、どう取りこぼしを防ぎ、fanout に何を渡すか — は未決**である。architecture.md も「サーバー間メッセージ (`server/`、未実装)」「型はまだコード化されていない」と記している。本 ADR でそれを決める。
+
+前提となる要件・制約:
+
+- requirements.md §3.2: VXSE43 / VXSE45 (EEW) → ウォームアップ、VTSE41 (津波警報・注意報等) → 案内フェーズ起動 / 解除、VTSE51 (津波情報) → 到達予想時刻の更新
+- requirements.md §3.3: 一次は DMDATA.jp の WebSocket、二次 (フォールバック) は気象庁防災情報 XML の ATOM ポーリング
+- NFR-01: DMDATA 受信 → APNs 送出まで p99 < 1 秒。subscriber 側で重い処理を挟めない
+- NFR-06: 検知〜配信系は multi-region。ただし端末はサーバー全損でも手動起動で案内できる
+- ADR-0001: Cloud Run のインスタンスは予告なく入れ替わるため、WS 切断 → 自動再接続 → **取りこぼし検知をアプリケーション層で必ず実装する**。実行基盤非依存 (VM 回帰の選択肢を残す) に保つ
+- requirements.md §9 未決事項 4: **DMDATA.jp の契約プランと電文フィルタ設計は未決**。本 ADR 執筆時点で契約・API キーともに無い
+
+### 一次情報の確認
+
+ADR-0003 / ADR-0006 / ADR-0007 と同じ手順で一次情報にあたろうとしたが、**本件では確認しきれなかった項目が多い**。開発環境のネットワーク egress ポリシーにより、以下のドメインへ到達できない (いずれも接続失敗を確認)。
+
+| ドメイン | 用途 | 到達可否 |
+|---|---|---|
+| `dmdata.jp` | DMDATA API v2 の公式リファレンス | ❌ egress ブロック |
+| `api.dmdata.jp` | socket.start / WebSocket / PULL API の実接続 | ❌ egress ブロック |
+| `xml.kishou.go.jp` | 気象庁防災情報 XML の ATOM フィードと電文サンプル | ❌ egress ブロック |
+| `www.data.jma.go.jp` | 気象庁「電文毎の解説資料」(種別コード表) | ❌ egress ブロック |
+
+確認できた範囲は以下に限られる。
+
+| 確認先 | 確認できた内容 |
+|---|---|
+| [p2pquake/dmdata-jp-api-v2-websocket-client](https://github.com/p2pquake/dmdata-jp-api-v2-websocket-client) (非公式クライアントのソース) | `socket.start` は `POST https://api.dmdata.jp/v2/socket`、API キーはクエリ `?key=`。リクエストは `{classifications, types, appName}`、レスポンスは `{"websocket":{"url":...}}`。WS メッセージは `type` で `start` / `ping` / `data` / `error` に分岐し、`ping` は同じ `pingId` を持つ `pong` で応答する。`data` の本体は「BASE64 デコード後に gzip 展開」 |
+| DMDATA ドキュメントの検索結果断片 | `compression` が `gzip` のとき `encoding` は常に `base64`。`classifications` に `telegram.earthquake` / `telegram.weather` 等を指定する。地理冗長用に `ws.api.dmdata.jp` / `ws-tokyo.api.dmdata.jp` のエンドポイントがある |
+
+**したがって本 ADR の DMDATA プロトコル理解と気象庁 XML の種別コード解釈は二次情報に依拠している。** issue #29 で国交省の凡例 RGB 表を「二次情報依拠」として扱ったのと同じ扱いとし、一次情報照合を残課題として明示的に切り出す (下記「帰結」)。**照合前に本番投入してはならない。**
+
+## 検討した選択肢
+
+### 論点 1: 解析対象の電文フォーマット
+
+#### 選択肢 1-A: 気象庁 XML を自前パースする
+
+DMDATA が配信する電文本体 (気象庁の原本 XML) を `encoding/xml` で自前解析する。
+
+- ✅ **ATOM フォールバック経路とパーサを共用できる**。二次経路 (気象庁防災情報 XML) は気象庁 XML しか流れてこないため、この選択肢なら解析系統が 1 つで済む
+- ✅ DMDATA 固有の表現に依存しない。契約プラン変更や DMDATA からの離脱時にパーサが無駄にならない
+- ✅ 電文の原本をそのまま扱うので、気象庁の仕様書が唯一の正本になる (デューデリジェンスの対象が 1 つ)
+- ❌ パーサの実装・保守コストを自前で持つ。気象庁 XML はスキーマが電文種別ごとに分かれており、名前空間の扱いも煩雑
+- 判定: **採用**
+
+#### 選択肢 1-B: DMDATA の JSON 変換を使う
+
+DMDATA は電文を JSON に変換して配信するオプションを持つ。
+
+- ✅ パース実装が軽い
+- ❌ **フォールバック経路では使えない**。ATOM 経路は気象庁 XML なので、結局 XML パーサも書く羽目になり、解析系統が 2 つに増える。2 系統あるとフォールバック時だけ壊れる経路が生まれ、しかもそれは平時にテストされない
+- ❌ JSON 変換が上位契約プランの機能である可能性がある (未確認)。未決の契約プラン選定に設計が依存してしまう
+- ❌ DMDATA 固有形式への依存が生じる
+- 判定: 棄却
+
+#### 選択肢 1-C: 両対応 (WS は JSON、フォールバックは XML)
+
+- ✅ 平時のパースが軽い
+- ❌ 選択肢 B の欠点 (2 系統) を、利点なしにそのまま抱える。実装量は最大
+- 判定: 棄却
+
+### 論点 2: 取りこぼしの検知方法
+
+ADR-0001 は「**シーケンス番号確認**による取りこぼし検知」と書いている。しかし本 ADR の調査範囲では、**DMDATA の WS `data` メッセージにグローバルな連番が載るという一次情報を確認できなかった**。気象庁 XML の `Head/Serial` は「同一 EventID 内での続報番号」であって配信ストリーム全体の連番ではないため、これで欠落は検知できない。
+
+#### 選択肢 2-A: 電文同一性によるデデュープ + 再接続時の ATOM バックフィル
+
+受信した電文を同一性キーで重複排除したうえで、WS 再接続の直後に ATOM フィードを 1 回取得して、切断中に発表された電文を拾い直す。
+
+- ✅ **フォールバック経路がバックフィル経路を兼ねる**。requirements §3.3 が求める二次経路を実装すれば、取りこぼし対策が同じコードで手に入る
+- ✅ 二次経路が「平時は死んでいて障害時だけ動く」状態にならない。再接続のたびに叩かれるので、フォールバックの動作が日常的に検証される (これは 1-B を棄却した理由と同じ思想)
+- ✅ DMDATA の連番の有無に依存しない。契約前でも設計を確定できる
+- ❌ ATOM フィードは即時性が無く更新間隔があるため、切断直後のバックフィルで取れない電文が残りうる。あくまで「穴を狭める」対策で、ゼロにはならない
+- ❌ デデュープの状態を持つ必要がある (Stage 1 は in-memory、Stage 2 は共有ストア)
+- 判定: **採用**
+
+#### 選択肢 2-B: DMDATA の PULL API (`telegram.list`) でバックフィルする
+
+- ✅ 一次ソースから直接埋められるので即時性で勝る
+- ❌ **API 仕様を一次情報で確認できておらず、契約プランでの利用可否も不明**。未契約の現状では設計を確定できない
+- 判定: 現時点では棄却。ただし `Backfiller` インターフェースを切っておき、契約後に実装を差し替えられるようにする
+
+#### 選択肢 2-C: ADR-0001 のままシーケンス番号を使う
+
+- ❌ 前提 (連番の存在) が未確認。存在しない前提に実装を賭けられない
+- 判定: 棄却。**ADR-0001 の当該記述は本 ADR で置き換える** (ADR-0001 に追記済み)
+
+### 論点 3: 追加する依存
+
+`server/go.mod` は依存ゼロ。CLAUDE.md により依存追加は ADR 事項。
+
+| 用途 | 採用 | 理由 |
+|---|---|---|
+| WebSocket | `github.com/coder/websocket` v1.8.15 | Go 標準ライブラリに WS は無い。本ライブラリは**それ自体が依存ゼロ**で、`context` ファーストの API を持つ。`gorilla/websocket` と比べて API 表面が小さく、`context` によるキャンセルが再接続ループと相性が良い |
+| Pub/Sub | `cloud.google.com/go/pubsub/v2` v2.7.0 | ADR-0001 が subscriber → fanout の起動を Pub/Sub と定めている。`pipeline/` が既に `cloud.google.com/go/storage` を使っており GCP SDK の前例がある。v1 系ではなく現行メジャーの v2 を採る |
+| XML / HTTP | 標準ライブラリ (`encoding/xml`, `net/http`) | 追加依存なしで足りる |
+
+Pub/Sub SDK は `server/go.mod` の `go 1.23` より新しい Go を要求するため、**`go` ディレクティブを引き上げる**。
+
+## 決定
+
+### 1. 気象庁 XML を自前パースする (論点 1-A)
+
+一次経路 (DMDATA WS) と二次経路 (気象庁 ATOM) の両方で同じパーサを通す。DMDATA の JSON 変換は使わない。
+
+`Control/Status` が `訓練` / `試験` の電文は**必ず破棄する**。訓練電文を実警報としてプッシュするのは、このプロダクトで最も避けるべき事故である。
+
+### 2. デデュープ + ATOM バックフィルで取りこぼしを防ぐ (論点 2-A)
+
+- デデュープキーは電文の同一性で決める。一次経路と二次経路で同じ電文が届いても 1 通として扱えるよう、**両経路に共通して存在する気象庁 XML のヘッダ項目** (`Head/EventID` + `Head/Serial` + `Head/InfoKind` + `Head/ReportDateTime`) をキーにする。DMDATA 固有の電文 ID は使わない (二次経路に無いため)
+- Stage 1 のデデュープ状態は TTL 付き in-memory。Stage 2 (multi-region、ADR-0001) では共有ストアが要るため `Deduper` インターフェースの背後に置く
+- WS の再接続直後に ATOM を 1 回取得してバックフィルする。フォールバックとバックフィルは同じ `atomfeed` パッケージで賄う
+
+### 3. サーバー間メッセージ契約を確定する
+
+fanout (#25) と app が受け取るペイロードを次の形に固定する。
+
+```json
+{
+  "version": 1,
+  "kind": "eew | tsunami_alert | all_clear | tsunami_info",
+  "telegramType": "VTSE41",
+  "eventId": "...",
+  "serial": "1",
+  "reportedAt": "2026-09-08T12:34:56Z",
+  "receivedAt": "2026-09-08T12:34:56Z",
+  "source": "dmdata | jma_atom",
+  "maxCategory": "大津波警報",
+  "areas": [
+    { "code": "...", "name": "...", "category": "...", "firstHeightAt": "...", "maxHeightM": 10 }
+  ]
+}
+```
+
+- `kind` は app 側 `EvacuationPhase.swift` の `Telegram` enum (`eew` / `tsunamiAlert` / `allClear` / `tsunamiInfo`) と 1 対 1 に対応させる
+- **フェーズ判定はサーバーに持たせない。** `EvacuationPhase.transitioned(on:)` は端末側にあり、サーバー全損でも手動起動で案内できること (NFR-06) がその前提である。サーバーが持つのは電文の分類と正規化までで、状態遷移は端末の責務に留める
+- `areas` は Stage 1 の全件送出では使わないが、Stage 2 の地域別送出 (ADR-0001) のために最初から載せる。後からペイロードを変えるとアプリ側の互換対応が要るため
+- `version` を先頭に置き、将来の非互換変更に備える
+
+### 4. 実行基盤非依存を担保する方法
+
+ADR-0001 の「VM へ戻す選択肢を残す」を具体化する。
+
+- 設定はすべて環境変数から読む。Cloud Run 固有のメタデータ API を使わない
+- 待ち受けポートは `PORT` (既定 8080)。ヘルスチェックは `/healthz` で「WS が生きていて直近 N 分以内に keepalive を受信している」ことを返す (ADR-0001 の「プロセス生存では不十分」を実装する)
+- `SIGTERM` で graceful shutdown する
+- `Publisher` / `Deduper` / `Backfiller` / `Clock` はインターフェース。GCP 依存は Pub/Sub の実装 1 箇所に閉じ込め、ローカルでは stdout 実装で動かせる
+- `DMDATA_API_KEY` が未設定なら一次経路を無効化し、二次経路だけで起動できる (未契約の現状でもプロセスが立ち上がる)
+
+## 帰結
+
+- subscriber が実装され、#25 (fanout) が着手可能になる。architecture.md の「サーバー間メッセージ (未実装)」が解消する
+- `server/` に初めて外部依存が入る。`server/go.sum` が生まれるため CI の依存キャッシュ設定も更新する
+- **本 ADR に基づく実装は、実 DMDATA 接続・実電文のいずれでも未検証である。** 検証はフェイクの WS サーバと手書き fixture によるテストに留まる。以下を満たすまで本番投入しない:
+  1. 気象庁「電文毎の解説資料」で、対象電文型 (VXSE43 / VXSE45 が EEW として正しいか)・津波種別コード (`Category/Kind/Code`)・解除の表現方法を照合する
+  2. DMDATA の公式リファレンスで socket.start と WS メッセージのフィールドを照合し、`types` による電文フィルタの指定方法を確定する
+  3. 実電文サンプルでパーサを検証する
+  4. DMDATA.jp の契約プランを選定する (requirements.md §9 未決事項 4)
+- 上記の照合は開発環境の egress ポリシーで到達できないドメインを要するため、**ネットワーク到達可能な環境で実施する必要がある**。この制約自体を残課題 issue に記録する
+- Stage 2 (multi-region) に進む際は、in-memory の `Deduper` を共有ストア実装に差し替える。ADR-0001 は Firestore トランザクションまたは Redis SETNX を挙げている。**両系 active-active にした時点で in-memory デデュープは機能しなくなる**ため、これは Stage 2 の必須作業である
+- DMDATA の PULL API が使えることを確認できたら、`Backfiller` の実装を ATOM から PULL API に差し替えて即時性を上げる。その際も ATOM 経路はフォールバックとして残す

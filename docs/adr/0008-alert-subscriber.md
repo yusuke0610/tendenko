@@ -132,15 +132,20 @@ fanout (#25) と app が受け取るペイロードを次の形に固定する�
   "telegramType": "VTSE41",
   "eventId": "...",
   "serial": "1",
+  "infoType": "発表",
   "reportedAt": "2026-09-08T12:34:56Z",
   "receivedAt": "2026-09-08T12:34:56Z",
   "source": "dmdata | jma_atom",
   "maxCategory": "大津波警報",
+  "maxIntensity": "6+",
+  "headline": "大津波警報を発表しました。",
   "areas": [
     { "code": "...", "name": "...", "category": "...", "firstHeightAt": "...", "maxHeightM": 10 }
   ]
 }
 ```
+
+`maxIntensity` は EEW の最大予測震度、`maxCategory` は津波電文の最重警戒レベル。空の項目は省略する (正本は `server/internal/alert/alert.go` で、JSON 形状はテストで固定している)。
 
 - `kind` は app 側 `EvacuationPhase.swift` の `Telegram` enum (`eew` / `tsunamiAlert` / `allClear` / `tsunamiInfo`) と 1 対 1 に対応させる
 - **フェーズ判定はサーバーに持たせない。** `EvacuationPhase.transitioned(on:)` は端末側にあり、サーバー全損でも手動起動で案内できること (NFR-06) がその前提である。サーバーが持つのは電文の分類と正規化までで、状態遷移は端末の責務に留める

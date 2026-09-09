@@ -39,6 +39,7 @@ func NewMemory(ttl time.Duration, now func() time.Time) *Memory {
 	return &Memory{ttl: ttl, now: now, seen: make(map[string]time.Time)}
 }
 
+// Seen はキーを記録し、記録済みだった場合に true を返す。呼ぶたびに期限切れを掃く。
 func (m *Memory) Seen(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,6 +58,7 @@ func (m *Memory) Seen(key string) bool {
 	return false
 }
 
+// Forget は記録を取り消し、同じ電文を別経路で拾い直せるようにする。
 func (m *Memory) Forget(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

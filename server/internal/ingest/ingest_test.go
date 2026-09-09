@@ -105,7 +105,7 @@ func TestHandlePublishes(t *testing.T) {
 	pub := newFakePublisher()
 	s := newSupervisor(t, pub)
 
-	s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA)
+	_ = s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA)
 
 	if pub.count() != 1 {
 		t.Fatalf("配信 = %d 件、want 1", pub.count())
@@ -121,8 +121,8 @@ func TestHandleDedupsAcrossSources(t *testing.T) {
 	pub := newFakePublisher()
 	s := newSupervisor(t, pub)
 
-	s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA)
-	s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceJMAAtom)
+	_ = s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA)
+	_ = s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceJMAAtom)
 
 	if pub.count() != 1 {
 		t.Errorf("配信 = %d 件、want 1", pub.count())
@@ -134,7 +134,7 @@ func TestHandleDropsDrill(t *testing.T) {
 	pub := newFakePublisher()
 	s := newSupervisor(t, pub)
 
-	s.Handle(context.Background(), "VTSE41", []byte(drillXML), alert.SourceDMDATA)
+	_ = s.Handle(context.Background(), "VTSE41", []byte(drillXML), alert.SourceDMDATA)
 
 	if pub.count() != 0 {
 		t.Errorf("訓練電文が配信された: %+v", pub.msgs)
@@ -145,8 +145,8 @@ func TestHandleSkipsUnsupportedAndMalformed(t *testing.T) {
 	pub := newFakePublisher()
 	s := newSupervisor(t, pub)
 
-	s.Handle(context.Background(), "VZSE40", []byte(alertXML), alert.SourceDMDATA)
-	s.Handle(context.Background(), "VTSE41", []byte("<Report>"), alert.SourceDMDATA)
+	_ = s.Handle(context.Background(), "VZSE40", []byte(alertXML), alert.SourceDMDATA)
+	_ = s.Handle(context.Background(), "VTSE41", []byte("<Report>"), alert.SourceDMDATA)
 
 	if pub.count() != 0 {
 		t.Errorf("配信 = %d 件、want 0", pub.count())
@@ -160,15 +160,40 @@ func TestHandleRetriesAfterPublishFailure(t *testing.T) {
 	pub.setErr(errors.New("pubsub down"))
 	s := newSupervisor(t, pub)
 
-	s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA)
+	// 配信失敗はエラーとして返す。atomfeed 側はこれを見て取得済み記録を取り消す
+	if err := s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceDMDATA); err == nil {
+		t.Fatal("配信失敗がエラーとして返っていない")
+	}
 	if pub.count() != 0 {
 		t.Fatal("失敗したのに記録されている")
 	}
 
 	pub.setErr(nil)
-	s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceJMAAtom)
+	if err := s.Handle(context.Background(), "VTSE41", []byte(alertXML), alert.SourceJMAAtom); err != nil {
+		t.Fatal(err)
+	}
 	if pub.count() != 1 {
 		t.Errorf("再試行が抑止された: 配信 = %d 件", pub.count())
+	}
+}
+
+// 捨てるべき電文は再試行しても結果が変わらないので、エラーにはしない。
+// ここをエラーにすると atomfeed が毎回同じ電文を取り直し続ける。
+func TestHandleDoesNotErrorOnDiscardedTelegrams(t *testing.T) {
+	pub := newFakePublisher()
+	s := newSupervisor(t, pub)
+
+	for _, tc := range []struct {
+		name, telegramType string
+		body               string
+	}{
+		{"対象外", "VZSE40", alertXML},
+		{"訓練", "VTSE41", drillXML},
+		{"解析不能", "VTSE41", "<Report>"},
+	} {
+		if err := s.Handle(context.Background(), tc.telegramType, []byte(tc.body), alert.SourceJMAAtom); err != nil {
+			t.Errorf("%s: err = %v, want nil", tc.name, err)
+		}
 	}
 }
 

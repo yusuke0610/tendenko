@@ -2,6 +2,7 @@ package atomfeed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,16 @@ type fakeJMA struct {
 	fetched    []string
 	etag       string
 	entryFiles []string
+	// dataStatus が 0 以外なら電文本体の取得をそのステータスで失敗させる。
+	dataStatus int
+	// brokenFeed を立てるとフィードとして解釈できない本文を返す。
+	brokenFeed bool
+}
+
+func (f *fakeJMA) set(fn func(*fakeJMA)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
 }
 
 func newFakeJMA(t *testing.T, entryFiles ...string) *fakeJMA {
@@ -30,6 +41,7 @@ func newFakeJMA(t *testing.T, entryFiles ...string) *fakeJMA {
 		f.feedHits++
 		etag := f.etag
 		files := f.entryFiles
+		broken := f.brokenFeed
 		f.mu.Unlock()
 
 		if etag != "" {
@@ -38,6 +50,10 @@ func newFakeJMA(t *testing.T, entryFiles ...string) *fakeJMA {
 				return
 			}
 			w.Header().Set("ETag", etag)
+		}
+		if broken {
+			_, _ = fmt.Fprint(w, `<feed><entry>`)
+			return
 		}
 		_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n")
 		_, _ = fmt.Fprint(w, `<feed xmlns="http://www.w3.org/2005/Atom">`)
@@ -51,7 +67,12 @@ func newFakeJMA(t *testing.T, entryFiles ...string) *fakeJMA {
 	mux.HandleFunc("/data/", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.fetched = append(f.fetched, r.URL.Path)
+		status := f.dataStatus
 		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 		_, _ = fmt.Fprintf(w, `<Report><Control><Title>%s</Title></Control></Report>`, r.URL.Path)
 	})
 
@@ -71,8 +92,9 @@ func (f *fakeJMA) counts() (feedHits int, fetched []string) {
 func collect(t *testing.T, c *Client) []Telegram {
 	t.Helper()
 	var got []Telegram
-	if err := c.Poll(context.Background(), func(_ context.Context, tel Telegram) {
+	if err := c.Poll(context.Background(), func(_ context.Context, tel Telegram) error {
 		got = append(got, tel)
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +156,62 @@ func TestPollHonorsETag(t *testing.T) {
 	}
 }
 
+// 取得が一時的に失敗した電文は、次回のポーリングで拾い直せなければならない。
+// 二次経路は津波警報の縮退経路なので、1 通の欠落が案内フェーズの起動漏れになる。
+func TestPollRetriesAfterFetchFailure(t *testing.T) {
+	f := newFakeJMA(t, "20260908213400_0_VTSE41_010000.xml")
+	f.set(func(f *fakeJMA) { f.dataStatus = http.StatusServiceUnavailable })
+	c := New(Config{FeedURL: f.feedURL(), Types: []string{"VTSE41"}})
+
+	if got := collect(t, c); len(got) != 0 {
+		t.Fatalf("取得失敗なのに %d 件届いた", len(got))
+	}
+	f.set(func(f *fakeJMA) { f.dataStatus = 0 })
+	if got := collect(t, c); len(got) != 1 {
+		t.Errorf("再試行されなかった: %d 件", len(got))
+	}
+}
+
+// 配信に失敗した電文も同様に拾い直せなければならない。
+func TestPollRetriesAfterHandlerFailure(t *testing.T) {
+	f := newFakeJMA(t, "20260908213400_0_VTSE41_010000.xml")
+	c := New(Config{FeedURL: f.feedURL(), Types: []string{"VTSE41"}})
+
+	err := c.Poll(context.Background(), func(context.Context, Telegram) error {
+		return errors.New("publish failed")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := collect(t, c); len(got) != 1 {
+		t.Errorf("再試行されなかった: %d 件", len(got))
+	}
+}
+
+// 解析に失敗した応答の ETag を覚えると、以降ずっと 304 が返って
+// 二次経路が無音のまま停止する。
+func TestPollDoesNotStoreETagOnParseFailure(t *testing.T) {
+	f := newFakeJMA(t, "20260908213400_0_VTSE41_010000.xml")
+	f.set(func(f *fakeJMA) {
+		f.etag = `"v1"`
+		f.brokenFeed = true
+	})
+	c := New(Config{FeedURL: f.feedURL(), Types: []string{"VTSE41"}})
+
+	if err := c.Poll(context.Background(), func(context.Context, Telegram) error { return nil }); err == nil {
+		t.Fatal("壊れたフィードはエラーになるはず")
+	}
+	// 健全でないのに /healthz が healthy と報告しないこと
+	if c.Live() {
+		t.Error("解析に失敗したのに Live() が true")
+	}
+
+	f.set(func(f *fakeJMA) { f.brokenFeed = false })
+	if got := collect(t, c); len(got) != 1 {
+		t.Errorf("304 で無音停止した: %d 件", len(got))
+	}
+}
+
 func TestPollFeedError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -141,7 +219,7 @@ func TestPollFeedError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{FeedURL: srv.URL})
-	if err := c.Poll(context.Background(), func(context.Context, Telegram) {}); err == nil {
+	if err := c.Poll(context.Background(), func(context.Context, Telegram) error { return nil }); err == nil {
 		t.Fatal("503 はエラーになるはず")
 	}
 }

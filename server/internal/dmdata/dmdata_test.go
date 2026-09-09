@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -264,6 +266,41 @@ func TestSocketStartRequestShape(t *testing.T) {
 	}
 	if len(got.Classifications) != 1 || got.Classifications[0] != "telegram.earthquake" {
 		t.Errorf("classifications = %v", got.Classifications)
+	}
+}
+
+// net/http は失敗を *url.Error で包み、そこに ?key= 付きの URL がそのまま入る。
+// 素通しすると再接続ログに API キーが残る (CWE-532)。
+func TestSocketStartErrorHidesAPIKey(t *testing.T) {
+	const secret = "super-secret-key"
+	// 接続できないアドレスにして HTTPClient.Do を失敗させる
+	c := New(Config{APIKey: secret, BaseURL: "http://127.0.0.1:1"})
+
+	_, err := c.socketStart(context.Background())
+	if err == nil {
+		t.Fatal("接続失敗はエラーになるはず")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("エラーに API キーが含まれる: %v", err)
+	}
+	// 原因そのもの (接続拒否など) は残っていること
+	if !strings.Contains(err.Error(), "Post") {
+		t.Errorf("原因が失われている: %v", err)
+	}
+}
+
+func TestRedactURLKeepsCause(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := redactURL(&url.Error{Op: "Get", URL: "https://api.example.test/socket?key=secret", Err: cause})
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("URL が残っている: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("原因が辿れない: %v", err)
+	}
+	// url.Error 以外はそのまま通す
+	if got := redactURL(cause); got != cause {
+		t.Errorf("redactURL(%v) = %v", cause, got)
 	}
 }
 

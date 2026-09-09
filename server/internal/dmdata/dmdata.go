@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,7 @@ type Handler interface {
 	Connected(ctx context.Context)
 }
 
+// Config は一次経路の設定。ゼロ値のフィールドは New が既定値で埋める。
 type Config struct {
 	APIKey          string
 	AppName         string
@@ -67,6 +69,7 @@ type Config struct {
 	now        func() time.Time
 }
 
+// Client は DMDATA.jp の WebSocket 購読クライアント。複数 goroutine から使える。
 type Client struct {
 	cfg Config
 
@@ -75,6 +78,8 @@ type Client struct {
 	lastActivity time.Time
 }
 
+// New は購読クライアントを作る。BaseURL・HTTPClient・Logger・バックオフ間隔は
+// 未設定なら既定値を使う。
 func New(cfg Config) *Client {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = DefaultBaseURL
@@ -164,9 +169,10 @@ func (c *Client) session(ctx context.Context, h Handler) error {
 		return fmt.Errorf("socket.start: %w", err)
 	}
 
+	// WS の URL にはチケットが載るため、エラーからも URL を落とす
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.cfg.HTTPClient})
 	if err != nil {
-		return fmt.Errorf("dial: %w", err)
+		return fmt.Errorf("dial: %w", redactURL(err))
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(readLimit)
@@ -274,6 +280,20 @@ func decodeBody(msg envelope) ([]byte, error) {
 	}
 }
 
+// redactURL は URL を含みうるエラーから URL を落とす。
+//
+// net/http は失敗を *url.Error で包み、そこにリクエスト URL がそのまま入る。
+// socket.start の URL には API キーが、WebSocket の URL にはチケットが載るため、
+// 素通しすると Run の再接続ログに資格情報が残ってしまう (CWE-532)。
+// 原因そのもの (接続拒否・タイムアウト等) は URL を含まないので残す。
+func redactURL(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return fmt.Errorf("%s: %w", uerr.Op, uerr.Err)
+	}
+	return err
+}
+
 // socketStart は WebSocket の接続先 URL を払い出す。
 // API キーはクエリ ?key= で渡す (DMDATA API v2 の仕様)。
 func (c *Client) socketStart(ctx context.Context) (string, error) {
@@ -289,8 +309,8 @@ func (c *Client) socketStart(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	url := c.cfg.BaseURL + "/socket?key=" + c.cfg.APIKey
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	endpoint := c.cfg.BaseURL + "/socket?key=" + c.cfg.APIKey
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +318,7 @@ func (c *Client) socketStart(ctx context.Context) (string, error) {
 
 	resp, err := c.cfg.HTTPClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", redactURL(err)
 	}
 	defer resp.Body.Close()
 

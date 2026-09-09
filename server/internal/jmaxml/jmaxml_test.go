@@ -76,6 +76,22 @@ func TestParseRejectsDrill(t *testing.T) {
 	}
 }
 
+// Status が空なのは「運用電文だと確認できていない」状態。構造が想定と違う電文を
+// 実警報として配信しないよう、通常以外はすべて落とす。
+func TestParseRejectsMissingStatus(t *testing.T) {
+	const noStatus = `<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control><Title>津波警報・注意報・予報</Title></Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/"><EventID>e1</EventID></Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/"><Tsunami><Forecast><Item>
+    <Area><Name>岩手県</Name><Code>212</Code></Area>
+    <Category><Kind><Name>大津波警報</Name></Kind></Category>
+  </Item></Forecast></Tsunami></Body>
+</Report>`
+	if _, err := Parse("VTSE41", []byte(noStatus)); !errors.Is(err, ErrNotOperational) {
+		t.Fatalf("err = %v, want ErrNotOperational", err)
+	}
+}
+
 func TestParseTsunamiInfo(t *testing.T) {
 	tel, err := Parse("VTSE51", load(t, "vtse51-info.xml"))
 	if err != nil {

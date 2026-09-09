@@ -19,6 +19,7 @@ import (
 	"github.com/yusuke0610/tendenko/server/internal/alert"
 )
 
+// Publisher は警報メッセージの送出先。実装の差し替えで GCP 依存を切り離せる。
 type Publisher interface {
 	Publish(ctx context.Context, m alert.Message) error
 	Close() error
@@ -31,8 +32,10 @@ type Stdout struct {
 	w  io.Writer
 }
 
+// NewStdout は 1 行 1 メッセージの JSON を w に書く Publisher を作る。
 func NewStdout(w io.Writer) *Stdout { return &Stdout{w: w} }
 
+// Publish はメッセージを 1 行の JSON として書く。
 func (s *Stdout) Publish(_ context.Context, m alert.Message) error {
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -44,6 +47,7 @@ func (s *Stdout) Publish(_ context.Context, m alert.Message) error {
 	return err
 }
 
+// Close は何もしない。Publisher を満たすためにある。
 func (s *Stdout) Close() error { return nil }
 
 // PubSub は Cloud Pub/Sub への送出。
@@ -52,6 +56,7 @@ type PubSub struct {
 	pub    *pubsub.Publisher
 }
 
+// NewPubSub は Cloud Pub/Sub へ送出する Publisher を作る。
 func NewPubSub(ctx context.Context, projectID, topic string) (*PubSub, error) {
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
@@ -65,6 +70,8 @@ func NewPubSub(ctx context.Context, projectID, topic string) (*PubSub, error) {
 	return &PubSub{client: client, pub: pub}, nil
 }
 
+// Publish はメッセージを送出し、確定するまで待つ。fanout の起動トリガーなので
+// 送れたかどうかを呼び出し元が知る必要がある。
 func (p *PubSub) Publish(ctx context.Context, m alert.Message) error {
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -85,6 +92,7 @@ func (p *PubSub) Publish(ctx context.Context, m alert.Message) error {
 	return nil
 }
 
+// Close は送出待ちを流し切ってから接続を閉じる。
 func (p *PubSub) Close() error {
 	p.pub.Stop()
 	return p.client.Close()

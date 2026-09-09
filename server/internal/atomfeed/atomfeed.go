@@ -36,11 +36,13 @@ const maxTelegramBytes = 8 << 20
 // 気象庁 XML の本文に種別コードは含まれないため、ここが二次経路での唯一の出どころ。
 var telegramTypePattern = regexp.MustCompile(`^[A-Z]{4}[0-9]{2}$`)
 
+// Telegram は取得した生電文。解析は jmaxml パッケージが行う。
 type Telegram struct {
 	Type string
 	Body []byte
 }
 
+// Config は二次経路の設定。ゼロ値のフィールドは New が既定値で埋める。
 type Config struct {
 	FeedURL    string
 	HTTPClient *http.Client
@@ -52,6 +54,7 @@ type Config struct {
 	Fetched dedup.Deduper
 }
 
+// Client は気象庁 ATOM フィードのポーリングクライアント。複数 goroutine から使える。
 type Client struct {
 	cfg   Config
 	types map[string]bool
@@ -72,6 +75,8 @@ func (c *Client) LastSuccess() time.Time {
 // Live は二次経路が機能しているかを返す。
 func (c *Client) Live() bool { return !c.LastSuccess().IsZero() }
 
+// New はポーリングクライアントを作る。FeedURL・HTTPClient・Logger・Fetched は
+// 未設定なら既定値を使う。
 func New(cfg Config) *Client {
 	if cfg.FeedURL == "" {
 		cfg.FeedURL = DefaultFeedURL
@@ -106,9 +111,13 @@ type feed struct {
 	Entries []entry `xml:"entry"`
 }
 
+// Handler は取得した電文 1 通を処理する。エラーを返すと Poll は取得済み記録を
+// 取り消し、次回のポーリングで拾い直せるようにする。
+type Handler func(context.Context, Telegram) error
+
 // Run は interval ごとに Poll する。ctx が切れるまで戻らない。
 // 個々のポーリング失敗はログに残して継続する (縮退経路が落ちても購読は止めない)。
-func (c *Client) Run(ctx context.Context, interval time.Duration, h func(context.Context, Telegram)) error {
+func (c *Client) Run(ctx context.Context, interval time.Duration, h Handler) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -124,7 +133,7 @@ func (c *Client) Run(ctx context.Context, interval time.Duration, h func(context
 }
 
 // Poll はフィードを 1 回取得し、未取得の対象電文をダウンロードして h に渡す。
-func (c *Client) Poll(ctx context.Context, h func(context.Context, Telegram)) error {
+func (c *Client) Poll(ctx context.Context, h Handler) error {
 	entries, err := c.fetchFeed(ctx)
 	if err != nil {
 		return err
@@ -138,16 +147,24 @@ func (c *Client) Poll(ctx context.Context, h func(context.Context, Telegram)) er
 		if len(c.types) > 0 && !c.types[telegramType] {
 			continue
 		}
-		// 同じ電文を毎回ダウンロードしないための記録。updated を含めて訂正報も拾う
-		if c.cfg.Fetched.Seen(e.ID + "|" + e.Updated) {
+		// 同じ電文を毎回ダウンロードしないための記録。updated を含めて訂正報も拾う。
+		// 記録は先に置いて取得権を確保し、処理しきれなかったら取り消す
+		key := e.ID + "|" + e.Updated
+		if c.cfg.Fetched.Seen(key) {
 			continue
 		}
 		body, err := c.fetchTelegram(ctx, href)
 		if err != nil {
+			c.cfg.Fetched.Forget(key)
 			c.cfg.Logger.Warn("atomfeed: 電文を取得できない", "href", href, "error", err)
 			continue
 		}
-		h(ctx, Telegram{Type: telegramType, Body: body})
+		// 配信まで通って初めて記録を残す。ここで取りこぼすと二次経路は
+		// 津波警報の縮退経路なので、1 通の欠落が案内フェーズの起動漏れになる
+		if err := h(ctx, Telegram{Type: telegramType, Body: body}); err != nil {
+			c.cfg.Fetched.Forget(key)
+			c.cfg.Logger.Warn("atomfeed: 電文を処理できない", "href", href, "error", err)
+		}
 	}
 	return nil
 }
@@ -177,8 +194,6 @@ func (c *Client) fetchFeed(ctx context.Context) ([]entry, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("atomfeed: status %d", resp.StatusCode)
 	}
-	c.markSuccess(resp.Header.Get("ETag"))
-
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTelegramBytes))
 	if err != nil {
 		return nil, err
@@ -187,6 +202,9 @@ func (c *Client) fetchFeed(ctx context.Context) ([]entry, error) {
 	if err := xml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("atomfeed: フィードを解釈できない: %w", err)
 	}
+	// ETag の保存は解析成功後に行う。解析に失敗した応答の ETag を覚えると、
+	// 以降ずっと 304 が返って二次経路が無音のまま停止する
+	c.markSuccess(resp.Header.Get("ETag"))
 	return f.Entries, nil
 }
 

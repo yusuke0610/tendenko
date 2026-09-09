@@ -22,6 +22,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -107,10 +108,17 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	checker := health.New(envDuration("HEALTH_MAX_SILENCE", 5*time.Minute), probes...)
 	srv := healthServer(checker)
 
+	// 待ち受けに失敗したまま購読を続けると、監視不能な subscriber が警報を配信し続ける。
+	// ヘルスチェックが立たないことは起動失敗として扱い、プロセスごと落とす。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	listenErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("subscriber: ヘルスチェックの待ち受けに失敗", "error", err)
+			listenErr <- err
+			cancel()
 		}
+		close(listenErr)
 	}()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -119,7 +127,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}()
 
 	logger.Info("subscriber: 起動した", "addr", srv.Addr, "dmdata", ws != nil)
-	return sup.Run(ctx)
+	runErr := sup.Run(ctx)
+	if err := <-listenErr; err != nil {
+		return fmt.Errorf("ヘルスチェックの待ち受けに失敗した: %w", err)
+	}
+	return runErr
 }
 
 func healthServer(checker *health.Checker) *http.Server {

@@ -155,8 +155,10 @@ func Parse(telegramType string, data []byte) (Telegram, error) {
 	if err := xml.Unmarshal(data, &r); err != nil {
 		return Telegram{}, fmt.Errorf("jmaxml: %s: %w", telegramType, err)
 	}
-	if s := r.Control.Status; s != "" && s != "通常" {
-		return Telegram{}, fmt.Errorf("%w: %s", ErrNotOperational, s)
+	// Status は必須項目。空は「運用電文だと確認できていない」ことを意味するので、
+	// 実警報として流さない (未知の構造の電文を配信しないための保険でもある)
+	if s := r.Control.Status; s != "通常" {
+		return Telegram{}, fmt.Errorf("%w: %q", ErrNotOperational, s)
 	}
 
 	tel := Telegram{

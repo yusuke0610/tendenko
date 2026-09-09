@@ -21,6 +21,7 @@ import (
 	"github.com/yusuke0610/tendenko/server/internal/publisher"
 )
 
+// Config は取り込みの設定。Deduper・Logger・AtomInterval は未設定なら既定値を使う。
 type Config struct {
 	Publisher publisher.Publisher
 	Deduper   dedup.Deduper
@@ -33,6 +34,7 @@ type Config struct {
 	now          func() time.Time
 }
 
+// Supervisor は一次・二次経路を束ね、電文を解析・重複排除して配信する。
 type Supervisor struct {
 	cfg Config
 	// backfill は WS 再接続時に ATOM の単発取得を予約する。容量 1 で、
@@ -40,6 +42,8 @@ type Supervisor struct {
 	backfill chan struct{}
 }
 
+// New は経路の監督を作る。WS が nil なら二次経路だけで、Atom が nil なら
+// 一次経路だけで動く。
 func New(cfg Config) *Supervisor {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -80,9 +84,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// Telegram は dmdata.Handler の実装。
+// Telegram は dmdata.Handler の実装。WS には再送の仕組みが無いためエラーは返せない。
+// 配信に失敗した電文は Handle が重複排除の記録を取り消すので、二次経路が拾い直す。
 func (s *Supervisor) Telegram(ctx context.Context, t dmdata.Telegram) {
-	s.Handle(ctx, t.Type, t.Body, alert.SourceDMDATA)
+	_ = s.Handle(ctx, t.Type, t.Body, alert.SourceDMDATA)
 }
 
 // Connected は dmdata.Handler の実装。WS 接続が確立するたびに呼ばれ、
@@ -94,8 +99,10 @@ func (s *Supervisor) Connected(context.Context) {
 	}
 }
 
-func (s *Supervisor) onAtom(ctx context.Context, t atomfeed.Telegram) {
-	s.Handle(ctx, t.Type, t.Body, alert.SourceJMAAtom)
+// onAtom は atomfeed.Handler の実装。エラーを返すと atomfeed 側が取得済み記録を
+// 取り消し、次回のポーリングで同じ電文を拾い直す。
+func (s *Supervisor) onAtom(ctx context.Context, t atomfeed.Telegram) error {
+	return s.Handle(ctx, t.Type, t.Body, alert.SourceJMAAtom)
 }
 
 func (s *Supervisor) backfillLoop(ctx context.Context) {
@@ -112,23 +119,26 @@ func (s *Supervisor) backfillLoop(ctx context.Context) {
 }
 
 // Handle は生電文 1 通を解析・重複排除して配信する。
-func (s *Supervisor) Handle(ctx context.Context, telegramType string, body []byte, src alert.Source) {
+//
+// 配信できなかったときだけエラーを返す。捨てるべき電文 (対象外・訓練・解析不能) は
+// 再試行しても結果が変わらないため、エラーにはしない。
+func (s *Supervisor) Handle(ctx context.Context, telegramType string, body []byte, src alert.Source) error {
 	tel, err := jmaxml.Parse(telegramType, body)
 	switch {
 	case errors.Is(err, jmaxml.ErrUnsupportedType):
 		// 対象外電文は購読の常態。黙って捨てる
-		return
+		return nil
 	case errors.Is(err, jmaxml.ErrNotOperational):
-		s.cfg.Logger.Info("ingest: 訓練・試験電文を破棄した", "type", telegramType, "source", src)
-		return
+		s.cfg.Logger.Info("ingest: 訓練・試験電文を破棄した", "type", telegramType, "source", src, "reason", err)
+		return nil
 	case err != nil:
 		s.cfg.Logger.Error("ingest: 電文を解析できない", "type", telegramType, "source", src, "error", err)
-		return
+		return nil
 	}
 
 	key := tel.DedupKey()
 	if s.cfg.Deduper.Seen(key) {
-		return
+		return nil
 	}
 
 	msg := alert.FromTelegram(tel, src, s.cfg.now())
@@ -137,8 +147,9 @@ func (s *Supervisor) Handle(ctx context.Context, telegramType string, body []byt
 		// 二重配信より未配信の方がはるかに高くつく。
 		s.cfg.Deduper.Forget(key)
 		s.cfg.Logger.Error("ingest: 配信に失敗した", "kind", msg.Kind, "eventId", msg.EventID, "error", err)
-		return
+		return err
 	}
 	s.cfg.Logger.Info("ingest: 配信した",
 		"kind", msg.Kind, "type", msg.TelegramType, "eventId", msg.EventID, "source", src)
+	return nil
 }

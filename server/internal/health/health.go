@@ -32,6 +32,7 @@ type Status struct {
 	Probes  []ProbeStatus `json:"probes"`
 }
 
+// Checker は入手経路の状態から subscriber の生存を判定する。
 type Checker struct {
 	probes     []Probe
 	maxSilence time.Duration
@@ -45,6 +46,8 @@ func New(maxSilence time.Duration, probes ...Probe) *Checker {
 	return &Checker{probes: probes, maxSilence: maxSilence, now: time.Now}
 }
 
+// Status は現在の判定結果を返す。maxSilence 以内に受信のある経路が
+// 1 本でもあれば Healthy になる。
 func (c *Checker) Status() Status {
 	now := c.now()
 	st := Status{Probes: make([]ProbeStatus, 0, len(c.probes))}
@@ -63,6 +66,8 @@ func (c *Checker) Status() Status {
 	return st
 }
 
+// ServeHTTP は判定結果を JSON で返す。不健全なら 503 を返し、実行基盤に
+// インスタンスを差し替えさせる。
 func (c *Checker) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	st := c.Status()
 	w.Header().Set("Content-Type", "application/json")

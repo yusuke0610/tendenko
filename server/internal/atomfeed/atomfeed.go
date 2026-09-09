@@ -56,9 +56,21 @@ type Client struct {
 	cfg   Config
 	types map[string]bool
 
-	mu   sync.Mutex
-	etag string
+	mu          sync.Mutex
+	etag        string
+	lastSuccess time.Time
 }
+
+// LastSuccess は最後にフィード取得に成功した時刻 (ヘルスチェック用)。
+// 304 も「経路が生きている」証拠なので成功として数える。
+func (c *Client) LastSuccess() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastSuccess
+}
+
+// Live は二次経路が機能しているかを返す。
+func (c *Client) Live() bool { return !c.LastSuccess().IsZero() }
 
 func New(cfg Config) *Client {
 	if cfg.FeedURL == "" {
@@ -159,16 +171,13 @@ func (c *Client) fetchFeed(ctx context.Context) ([]entry, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
+		c.markSuccess("")
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("atomfeed: status %d", resp.StatusCode)
 	}
-	if tag := resp.Header.Get("ETag"); tag != "" {
-		c.mu.Lock()
-		c.etag = tag
-		c.mu.Unlock()
-	}
+	c.markSuccess(resp.Header.Get("ETag"))
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTelegramBytes))
 	if err != nil {
@@ -179,6 +188,15 @@ func (c *Client) fetchFeed(ctx context.Context) ([]entry, error) {
 		return nil, fmt.Errorf("atomfeed: フィードを解釈できない: %w", err)
 	}
 	return f.Entries, nil
+}
+
+func (c *Client) markSuccess(etag string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastSuccess = time.Now()
+	if etag != "" {
+		c.etag = etag
+	}
 }
 
 func (c *Client) fetchTelegram(ctx context.Context, href string) ([]byte, error) {

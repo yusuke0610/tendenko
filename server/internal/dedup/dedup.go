@@ -14,6 +14,9 @@ import (
 type Deduper interface {
 	// Seen はキーを記録し、記録済みだった場合に true を返す。
 	Seen(key string) bool
+	// Forget は記録を取り消す。配信に失敗した電文をもう一方の経路で拾い直せるようにする。
+	// 警報を二重に送るコストより、送れないコストの方がはるかに大きい。
+	Forget(key string)
 }
 
 // Memory は単一プロセス内の TTL 付き重複排除。
@@ -52,4 +55,10 @@ func (m *Memory) Seen(key string) bool {
 	}
 	m.seen[key] = t
 	return false
+}
+
+func (m *Memory) Forget(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, key)
 }

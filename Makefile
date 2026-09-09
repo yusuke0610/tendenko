@@ -7,7 +7,7 @@ SHELL := ./scripts/nix-bash.sh
 .DEFAULT_GOAL := help
 
 .PHONY: help setup server-run server-test server-lint pipeline-run pipeline-run-one pipeline-test \
-        pipeline-normalize-data pipeline-tiles-one pipeline-image pipeline-run-docker \
+        pipeline-normalize-data pipeline-fetch-raster pipeline-tiles-one pipeline-image pipeline-run-docker \
         app-generate app-build app-run app-test domain-test infra-init infra-plan infra-apply docs-adr fmt
 
 help: ## 全ターゲットの一覧と説明を表示
@@ -27,10 +27,23 @@ server-test: ## server/ のテストを実行
 server-lint: ## server/ を golangci-lint でチェック
 	cd server && golangci-lint run ./...
 
-pipeline-normalize-data: ## 浸水想定区域 (A40 + 福井県)・避難場所の実データを正規化 GeoJSON に変換 (取得元は ADR-0003)
+# 東京都・香川県は A40 にも県オープンデータにも無く、ハザードマップポータルサイトの
+# ラスタタイルから変換する (ADR-0003)。タイル取得はネットワーク律速で時間がかかるため
+# 別ターゲットにしてある (make pipeline-fetch-raster)。取得済みなら normalize が拾う。
+pipeline-normalize-data: ## 浸水想定区域 (A40 + 福井県 + 東京都/香川県)・避難場所の実データを正規化 GeoJSON に変換 (取得元は ADR-0003)
 	cd pipeline && ./scripts/normalize-fukui.sh
+	cd pipeline && for p in tokyo kagawa; do \
+		if [ -d "data/$$p/tiles" ]; then ./scripts/normalize-raster-tsunami.sh $$p; \
+		else echo "skip: $$p (data/$$p/tiles が無い。make pipeline-fetch-raster で取得)"; fi; \
+	done
 	cd pipeline && ./scripts/normalize-a40.sh
 	cd pipeline && ./scripts/normalize-shelters.sh
+
+# 東京都・香川県の津波浸水想定ラスタタイルを取得する (ハザードマップポータルサイト、PDL1.0)。
+# ZOOM / START_ZOOM / JOBS で調整できる (既定はスクリプト側 = z14 / z8 / 4)。
+pipeline-fetch-raster: ## 東京都・香川県の浸水想定ラスタタイルを取得 (ネットワーク律速。ADR-0003)
+	cd pipeline && ./scripts/fetch-tsunami-raster.sh tokyo
+	cd pipeline && ./scripts/fetch-tsunami-raster.sh kagawa
 
 # 一括: PBF に置いた OSM データの海岸線メッシュを全生成 (全国は japan-latest.osm.pbf を指定)。
 # 浸水想定区域・避難場所の正規化データがあれば自動で使う (make pipeline-normalize-data で生成)。

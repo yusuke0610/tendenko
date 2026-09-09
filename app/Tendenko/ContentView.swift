@@ -23,15 +23,18 @@ struct ContentView: View {
     @State private var routePolyline: [GeoPoint] = []
     @State private var inundationSegments: [[GeoPoint]] = []
     @State private var attributions: [String] = ["OpenStreetMap contributors", "国土地理院"]
-    @State private var announcer = SpeechAnnouncer()
-    /// 発話済みの案内。同じ経路で再計算が走っても読み上げ直さないためのガード
-    @State private var announcedGuidance: [GuidanceStep] = []
+    /// 案内フェーズの追従と発話 (FR-13/FR-14/FR-16、ADR-0008)
+    @State private var session = GuidanceSession()
+    /// 表示中パッケージの経路探索器。グラフを保持してリルートを 3 秒に収める (FR-14)
+    @State private var engine: RouteEngine?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let styleURL {
                 MapView(styleURL: styleURL, center: center, zoomLevel: 12,
-                        routePolyline: routePolyline, inundationSegments: inundationSegments)
+                        routePolyline: routePolyline, inundationSegments: inundationSegments,
+                        showsUserLocation: coordinator.isGuiding)
                     .ignoresSafeArea()
             } else if let loadError {
                 Text(loadError).foregroundStyle(.red).padding()
@@ -55,17 +58,24 @@ struct ContentView: View {
             startGlyphServer()
             coordinator.start()
             await presentMap()
-            await computeOverlay()
+            await refreshRoute()
         }
         .onChange(of: coordinator.tilesPath) { _, _ in
             Task {
                 await presentMap()
-                await computeOverlay()
+                await refreshRoute()
             }
         }
-        // 測位はパッケージ取得と独立して走るので、現在地が届いた時点でも経路を引き直す
         .onChange(of: coordinator.currentLocation) { _, _ in
-            Task { await computeOverlay() }
+            Task { await locationChanged() }
+        }
+        // 案内フェーズはフォアグラウンドに閉じる (ADR-0008)。背景測位は FR-10 と一体で決める
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                if session.isActive, !session.hasArrived { coordinator.beginGuidance() }
+            } else {
+                coordinator.endGuidance()
+            }
         }
     }
 
@@ -107,64 +117,86 @@ struct ContentView: View {
         }
     }
 
-    /// 現在地メッシュの region.sqlite から避難経路・浸水エッジ・音声案内を計算する。
-    /// 読込 + 探索 + 案内文生成はすべて純粋処理なのでバックグラウンドで行う (RoadGraph は Sendable)。
-    private func computeOverlay() async {
+    /// 現在地が届いたときの分岐。
+    ///
+    /// **案内フェーズ中は経路を引き直さない (ADR-0008)。** 連続測位では現在地が 1Hz 級で
+    /// 届くため、以前のように位置更新のたびに経路を再計算すると探索が回り続ける。
+    /// 案内中の位置更新は追従に流し、経路を引き直すのは逸脱 (FR-14) のときだけにする。
+    private func locationChanged() async {
+        guard let location = coordinator.currentLocation else { return }
+        // 到達後は引き直さない (FR-16)。避難場所に着いた人に次の経路は要らないし、
+        // 避難場所を始点に引き直すと「その場から自分自身への経路」を案内し直すことになる
+        guard !session.hasArrived else { return }
+        guard session.isActive else {
+            // 案内前。測位はパッケージ取得と独立して走るので、現在地が届いた時点で経路を引く
+            await refreshRoute()
+            return
+        }
+        let needsReroute = session.update(location: location)
+        if session.hasArrived {
+            // 到達したら追従は用済み。連続測位を止める (FR-16、NFR-05)
+            coordinator.endGuidance()
+            session.end()
+            return
+        }
+        if needsReroute {
+            await refreshRoute()
+        }
+    }
+
+    /// 現在地メッシュの region.sqlite から避難経路・浸水エッジ・音声案内を計算して反映する。
+    /// 初回の経路確定にもリルート (FR-14) にも同じ経路を通る — どちらも「今の現在地から引き直す」。
+    private func refreshRoute() async {
         let regionPath = coordinator.regionPath ?? bundledSamplePath(resource: "region-584177",
                                                                      extension: "sqlite")
         guard let regionPath else { return }
-        let start = startPoint()
-        // 計算中に現在地やパッケージが変われば、この結果は古い。書き戻す前に照合する
+        // パッケージが差し替わったらグラフも案内も持ち越さない (別の地域の話になる)
+        if engine?.regionPath != regionPath {
+            engine = RouteEngine(regionPath: regionPath)
+            session.reset()
+            coordinator.endGuidance()
+        }
+        guard let engine else { return }
+
+        // 計算中にパッケージが変われば、この結果は古い。書き戻す前に照合する
         let requestedRegion = coordinator.regionPath
-        let requestedLocation = coordinator.currentLocation
-
-        let result = await Task.detached { () -> Overlay? in
-            guard let graph = try? GraphLoader.load(paths: [regionPath]),
-                  let shelters = try? ShelterLoader.load(paths: [regionPath]),
-                  let startNode = RouteGeometry.nearestNode(to: start, in: graph)
-            else { return nil }
-            // 避難場所を goal ノードに丸め、最小コスト経路を 1 本求める (FR-12)。
-            // どの避難場所に着いたかを案内文で言えるよう、丸めたノード → 避難場所も控える
-            var sheltersByNode: [Int64: Shelter] = [:]
-            for shelter in shelters {
-                guard let node = RouteGeometry.nearestNode(to: shelter.point, in: graph) else { continue }
-                sheltersByNode[node] = shelter
-            }
-            let route = EvacuationRouter.route(graph: graph, from: startNode,
-                                               goals: Set(sheltersByNode.keys))
-            let destination = route?.nodeIDs.last.flatMap { sheltersByNode[$0] }
-            return Overlay(
-                polyline: route.map { RouteGeometry.polyline($0, in: graph) } ?? [],
-                inundation: RouteGeometry.inundationSegments(in: graph),
-                // 表示中パッケージの出典 (帰属表示、ADR-0002)。古いパッケージは空。
-                attributions: (try? MetaLoader.attributions(path: regionPath)) ?? [],
-                guidance: route.map {
-                    GuidanceScript.steps(for: $0, in: graph, destination: destination)
-                } ?? [],
-                summary: route.map { GuidanceScript.summary(for: $0, destination: destination) })
-        }.value
-
-        guard let result else { return }
-        // 探索中に現在地やパッケージが差し替わっていたら、この経路はもう現在地のものではない。
+        let origin = startPoint()
+        guard let result = await engine.route(from: origin) else { return }
+        // 探索中にパッケージが差し替わっていたら、この経路はもう現在地のものではない。
         // 古い経路を地図に出したまま確定させると、避難中に別の場所の経路を見せることになる
-        guard coordinator.regionPath == requestedRegion,
-              coordinator.currentLocation == requestedLocation
-        else { return }
-        routePolyline = result.polyline
+        guard coordinator.regionPath == requestedRegion else { return }
+        // **現在地は厳密一致で照合しない (ADR-0008)。** 連続測位では探索の間にも現在地が動くため、
+        // 一致を求めると案内中のリルートがほぼ必ず破棄される。始点から大きく離れたときだけ捨てる
+        if let latest = coordinator.currentLocation,
+           latest.distanceM(to: origin) > Self.staleOriginToleranceM {
+            return
+        }
+
+        // 経路が引けなかった結果で、案内中の経路を消さない。
+        // 音声は古い経路の案内を続けているのに地図から線だけ消えると、画面と音声が食い違う
+        if !result.polyline.isEmpty || !session.isActive {
+            routePolyline = result.polyline
+        }
         inundationSegments = result.inundation
         if !result.attributions.isEmpty { attributions = result.attributions }
-        announce(result)
+        startGuidance(with: result)
     }
 
-    /// 経路が確定したら概要と最初の指示を読み上げる (FR-13)。
-    /// 位置に追従して残りを順次読み上げるのは FR-14/FR-16 と合わせて実装する。
-    private func announce(_ overlay: Overlay) {
-        // 同梱サンプルの経路は現在地と無関係なので読み上げない (SampleFallback 参照)
-        guard SampleFallback.shouldAnnounce(regionPath: coordinator.regionPath) else { return }
-        guard !overlay.guidance.isEmpty, overlay.guidance != announcedGuidance else { return }
-        announcedGuidance = overlay.guidance
-        let opening = overlay.summary.map { [$0] } ?? []
-        announcer.announce(opening + overlay.guidance.prefix(2).map(\.text))
+    /// 経路が確定したら案内フェーズに入る (ADR-0008)。
+    ///
+    /// 電文受信 (FR-10/FR-11) が未実装のため、案内フェーズの起点は「実データの経路が確定した瞬間」
+    /// とする。境界は音声案内の可否 (`SampleFallback.shouldAnnounce`) と同じで、
+    /// **同梱サンプルの経路では案内フェーズに入らない** — 現在地と無関係な経路に追従しても
+    /// 意味が無く、連続測位を焚くだけになる。
+    private func startGuidance(with result: RouteEngine.Result) {
+        guard SampleFallback.shouldAnnounce(regionPath: coordinator.regionPath),
+              !result.guidance.isEmpty,
+              let origin = coordinator.currentLocation
+        else { return }
+        session.begin(polyline: result.polyline, steps: result.guidance,
+                      summary: result.summary, at: origin)
+        guard !session.hasArrived else { return }
+        coordinator.beginGuidance()
     }
 
     /// 同梱サンプルのパス。フォールバックが明示的に有効なときだけ返す (AppConfig)。
@@ -175,22 +207,16 @@ struct ContentView: View {
         return Bundle.main.path(forResource: resource, ofType: ext)
     }
 
+    /// 経路を引いた始点から現在地がこれ以上離れていたら、その探索結果は捨てる (m)。
+    /// 徒歩なら数十秒ぶんの移動にあたり、探索 (端末内・数百ms 級) の間に超えることはまず無い
+    private static let staleOriginToleranceM: Double = 50
+
     /// 経路の始点。判断は `RouteOrigin` に切り出してテストしている。
     private func startPoint() -> GeoPoint {
         RouteOrigin.resolve(regionPath: coordinator.regionPath,
                             currentLocation: coordinator.currentLocation,
                             sample: .kamaishiSample)
     }
-}
-
-/// バックグラウンドで計算した表示・発話用の一式。純粋な値だけを運ぶ (Sendable)。
-private struct Overlay: Sendable {
-    let polyline: [GeoPoint]
-    let inundation: [[GeoPoint]]
-    let attributions: [String]
-    let guidance: [GuidanceStep]
-    /// 経路が見つからなければ nil
-    let summary: String?
 }
 
 /// 縮退状態 (現在地が取れない・配信 URL 未設定・その地域のパッケージが無い) の告知。

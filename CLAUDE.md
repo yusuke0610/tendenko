@@ -34,6 +34,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) は make ターゲットを呼�
 
 ## 次セッションの最優先タスク
 
+0. **警報検知 subscriber の検証と fanout (#24 / #25)** — subscriber は実装済み (ADR-0008。`server/internal/` の jmaxml/alert/dedup/dmdata/atomfeed/publisher/health/ingest)。ただし **DMDATA 未契約・実電文で未検証**であり、そのまま本番投入してはならない。残: (a) 気象庁「電文毎の解説資料」で津波種別コード・解除の表現・対象電文型を照合、(b) DMDATA 公式リファレンスで socket.start と WS メッセージを照合し契約プランを選定 (requirements §9 未決事項 4)、(c) `cmd/fanout` の実装 (#25)、(d) Stage 2 用の Firestore ベース `Deduper`、(e) subscriber の Cloud Run サービス定義。**(a)(b) は開発環境から到達できないドメイン (dmdata.jp / 気象庁) を要するため、ネットワーク到達可能な環境で行う**
 1. **FR-02 (地域パッケージの自動ダウンロード)** — **アプリ側実装は完了** (ADR-0004。MeshCode/CachePlanner/RegionPackageStore/GCSPackageFetcher/RegionCacheCoordinator)。ContentView は現在地メッシュのパッケージを DL してキャッシュから表示し、未取得時は同梱サンプル (584177) にフォールバックする。残: (a) 実 GCS 接続 — infra `tofu apply` + パッケージ upload 後に `AppConfig.packagesBaseURL` を設定 (要 GCP 認証)、(b) A40 条件付き県の除外 (ADR-0002、public 再生成の前提)
 2. **FR-14 (経路逸脱リルート) / FR-16 (目的地到達検知)** — 音声案内 (FR-13) は実装済み (ADR-0007。`GuidanceScript` + `SpeechAnnouncer`)。**判定のドメイン層も実装済み** (`RouteTracking.swift` の `RouteTracker.track`。逸脱・到達・案内の進行・次の指示までの残距離を返す純粋関数、`RouteGeometry.distanceToPolylineM` / `progressAlongPolylineM` / `GeoPoint.distanceM` を追加)。**残るのは UI 層の配線**:
    - `RegionCacheCoordinator` は `requestLocation()` の単発測位 + significant location change しか使っていない。FR-14 の「3 秒以内にリルート」には案内フェーズ中の連続測位 (`startUpdatingLocation`) が要るが、NFR-05 は平時の常時 GPS を禁じている。**「案内フェーズ中だけ連続測位に切り替える」判断は ADR に起こしてから実装する**

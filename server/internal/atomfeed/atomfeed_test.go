@@ -39,20 +39,20 @@ func newFakeJMA(t *testing.T, entryFiles ...string) *fakeJMA {
 			}
 			w.Header().Set("ETag", etag)
 		}
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n")
-		fmt.Fprint(w, `<feed xmlns="http://www.w3.org/2005/Atom">`)
+		_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n")
+		_, _ = fmt.Fprint(w, `<feed xmlns="http://www.w3.org/2005/Atom">`)
 		for i, name := range files {
-			fmt.Fprintf(w, `<entry><id>urn:uuid:%d</id><updated>2026-09-08T21:34:00Z</updated>`+
+			_, _ = fmt.Fprintf(w, `<entry><id>urn:uuid:%d</id><updated>2026-09-08T21:34:00Z</updated>`+
 				`<link type="application/xml" href="%s/data/%s"/></entry>`, i, f.URL, name)
 		}
-		fmt.Fprint(w, `</feed>`)
+		_, _ = fmt.Fprint(w, `</feed>`)
 	})
 
 	mux.HandleFunc("/data/", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.fetched = append(f.fetched, r.URL.Path)
 		f.mu.Unlock()
-		fmt.Fprintf(w, `<Report><Control><Title>%s</Title></Control></Report>`, r.URL.Path)
+		_, _ = fmt.Fprintf(w, `<Report><Control><Title>%s</Title></Control></Report>`, r.URL.Path)
 	})
 
 	f.Server = httptest.NewServer(mux)

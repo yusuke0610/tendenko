@@ -10,3 +10,6 @@ linters:
         - (*database/sql.DB).Close
         - (*database/sql.Tx).Rollback
         - (*database/sql.Stmt).Close
+        - (*compress/gzip.Reader).Close
+        # WebSocket の後始末。切断済み・切断途中でも失敗に対処のしようがない
+        - (*github.com/coder/websocket.Conn).CloseNow

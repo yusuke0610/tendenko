@@ -13,7 +13,7 @@ flowchart TB
     end
 
     subgraph gcp [GCP — Cloud Run  ADR-0001]
-        SUB["subscriber (未実装)<br>WS 常時購読・電文解析<br>min-instances=1"]
+        SUB["subscriber (実装済・未検証)<br>WS 常時購読・電文解析<br>min-instances=1"]
         FAN["fanout (未実装)<br>APNs high priority push"]
         SUB -->|Pub/Sub| FAN
     end
@@ -31,19 +31,21 @@ flowchart TB
     end
 
     JMA --> DMDATA --> SUB
+    JMA -.ATOM ポーリング<br>縮退・バックフィル.-> SUB
     FAN --> APNS[APNs] --> OSAPI
     OSM --> PIPE
     GCS -.平時に事前ダウンロード.-> iphone
 ```
 
-## 実装状況 (2026-07時点)
+## 実装状況 (2026-09時点)
 
 | 領域 | 状態 |
 |---|---|
 | `pipeline/` | ✅ 実装済み。全国 2,515 メッシュ分のパッケージ生成を実測済み ([ADR-0003](adr/0003-region-package-format.md)) |
 | `app/` (ドメイン層・UI層) | ✅ 実装済み。経路探索・地図描画・オフライン配信・地域パッケージの自動DL・音声案内 (FR-13) まで動作確認済み |
 | `infra/` (OpenTofu) | ✅ 定義済み、**本番 `tofu apply` は未実行** (プロジェクトID未確定) |
-| `server/` (subscriber・fanout) | ❌ **未実装**。`cmd/subscriber/main.go`・`cmd/fanout/main.go` は TODO コメントのみのスタブ |
+| `server/` subscriber | ⚠️ 実装済みだが**実接続・実電文で未検証** ([ADR-0008](adr/0008-alert-subscriber.md))。DMDATA 未契約、かつ電文コード表が一次情報と未照合のため、照合が済むまで本番投入しない |
+| `server/` fanout | ❌ **未実装**。`cmd/fanout/main.go` は TODO コメントのみのスタブ |
 
 ## ディレクトリ索引
 
@@ -52,7 +54,8 @@ flowchart TB
 | `app/project.yml` | Xcode プロジェクトの正本 (XcodeGen)。ターゲット・依存・ビルド設定 |
 | `app/TendenkoDomain/` | ローカル Swift Package。ドメイン層 (`TendenkoDomain`) とストレージ層 (`TendenkoStorage`)。macOSでも `make domain-test` でテストできる |
 | `app/Tendenko/` | UI 層 (SwiftUI + MapLibre Native)。実機・シミュレータでのみビルド可能 |
-| `server/cmd/subscriber/`, `server/cmd/fanout/` | 警報検知・プッシュ配信 (未実装、スタブのみ) |
+| `server/cmd/subscriber/`, `server/internal/` | 警報検知 (実装済み・実接続で未検証) |
+| `server/cmd/fanout/` | プッシュ配信 (未実装、スタブのみ) |
 | `pipeline/cmd/build-package/` | 地域パッケージ生成バッチのエントリポイント |
 | `pipeline/internal/` | パイプラインの内部パッケージ群 (下表) |
 | `pipeline/scripts/` | 外部データ (A40・福井県等) を正規化 GeoJSON に変換するスクリプト群 |
@@ -107,14 +110,27 @@ flowchart TB
 | `RegionCacheCoordinator.swift` | 位置監視とキャッシュ更新の配線 (`CachePlanner`をアプリに接続) |
 | `AppConfig.swift` | 実行時設定値 (`packagesBaseURL`等) |
 
-### `server/` — 警報検知・プッシュ配信 (Go, Cloud Run, **未実装**)
+### `server/` — 警報検知・プッシュ配信 (Go, Cloud Run)
 
-| コマンド | 責務 (設計のみ、TODO) |
+| コマンド | 責務 | 状態 |
+|---|---|---|
+| `cmd/subscriber` | DMDATA.jpのWebSocketを常時購読し、EEW (VXSE43/45)・津波電文 (VTSE41/51) を解析。常時稼働 (min-instances=1) | ⚠️ 実装済み・実接続で未検証 |
+| `cmd/fanout` | 警報時に対象地域のユーザーへAPNs high priority pushを送出。受信→送出 p99 < 1秒 (NFR-01) | ❌ 未実装 (スタブ) |
+
+subscriber の内部構成 ([ADR-0008](adr/0008-alert-subscriber.md)):
+
+| パッケージ | 責務 |
 |---|---|
-| `cmd/subscriber` | DMDATA.jpのWebSocketを常時購読し、EEW (VXSE43/45)・津波電文 (VTSE41/51) を解析。常時稼働 (min-instances=1) |
-| `cmd/fanout` | 警報時に対象地域のユーザーへAPNs high priority pushを送出。受信→送出 p99 < 1秒 (NFR-01) |
+| `internal/jmaxml` | 気象庁XMLの解析。一次経路・二次経路で共用する唯一のパーサ。訓練・試験電文はここで落とす |
+| `internal/alert` | `subscriber` → `fanout` → app のメッセージ契約 (下記) |
+| `internal/dmdata` | 一次経路。DMDATA.jpのWebSocket購読・自動再接続・gzip復号 |
+| `internal/atomfeed` | 二次経路。気象庁ATOMフィードのポーリング。DMDATA障害時の縮退と、WS再接続時のバックフィルを兼ねる |
+| `internal/dedup` | 電文の重複排除。二経路からの二重取得は設計上の常態 |
+| `internal/ingest` | 経路の監督と配信 |
+| `internal/publisher` | Pub/Sub送出。GCP依存をここ1箇所に閉じ込める |
+| `internal/health` | `/healthz`。「プロセス生存」ではなく「入手経路が生きていて直近N分以内に受信している」ことで判定 |
 
-実行基盤非依存に保つ ([ADR-0001](adr/0001-execution-platform.md): コスト最適化時にVMへ戻す選択肢を残す)。
+実行基盤非依存に保つ ([ADR-0001](adr/0001-execution-platform.md): コスト最適化時にVMへ戻す選択肢を残す)。設定は環境変数のみで、Cloud Run固有のAPIを使わない。`DMDATA_API_KEY` 未設定なら二次経路だけで起動する。
 
 ### `pipeline/` — 地域パッケージ生成バッチ (Go + GDAL/osmium/tilemaker)
 
@@ -166,9 +182,24 @@ shelters (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, elev_m REAL)
 
 GCS上でパッケージ一覧・バージョン・ハッシュ・生成日時を管理する。app側は `RegionManifest.swift` がデコードし、`CachePlanner.swift` が現在地3×3メッシュの差分DL判定に使う。
 
-### サーバー間メッセージ (`server/`、未実装)
+### サーバー間メッセージ: `alert.Message` ([ADR-0008](adr/0008-alert-subscriber.md))
 
-DMDATA.jp配信電文 → `subscriber` が解析 → Pub/Sub経由で `fanout` を起動 → APNs push、という流れを想定 (型はまだコード化されていない)。app側の受信電文表現は `EvacuationPhase.swift` に定義済み。
+DMDATA.jp配信電文 (または気象庁ATOM) → `subscriber` が解析 → Pub/Sub経由で `fanout` を起動 → APNs push。正本は `server/internal/alert/alert.go`。
+
+```json
+{
+  "version": 1,
+  "kind": "eew | tsunami_alert | all_clear | tsunami_info",
+  "telegramType": "VTSE41",
+  "eventId": "20260908213000", "serial": "1", "infoType": "発表",
+  "reportedAt": "2026-09-08T21:34:00+09:00", "receivedAt": "2026-09-08T21:34:02+09:00",
+  "source": "dmdata | jma_atom",
+  "maxCategory": "大津波警報", "maxIntensity": "6+",
+  "areas": [{"code": "212", "name": "岩手県", "category": "大津波警報", "firstHeightAt": "...", "maxHeightM": 10}]
+}
+```
+
+`kind` はapp側 `EvacuationPhase.swift` の `Telegram` enumと1対1に対応する (対応はテストで固定)。**フェーズ遷移はサーバーに持たせない**。`EvacuationPhase.transitioned(on:)` は端末側にあり、「サーバー全損でも手動起動で案内できる」(NFR-06) がその前提である。`areas` はStage 1の全件送出では使わないが、Stage 2の地域別送出 ([ADR-0001](adr/0001-execution-platform.md)) のために最初から載せている。
 
 ## 障害時の考え方
 

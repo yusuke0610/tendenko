@@ -101,7 +101,7 @@ flowchart TB
 | ファイル | 責務 |
 |---|---|
 | `TendenkoApp.swift` | アプリのエントリポイント |
-| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・経路オーバーレイ計算・音声案内の配線 |
+| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・音声案内の配線と、`refreshRoute` による経路探索結果の受け取り |
 | `GuidanceSession.swift` | 案内フェーズの追従と発話の配線 (FR-13/FR-14/FR-16)。判断はドメイン層に委ね、分岐を持たない |
 | `RouteEngine.swift` | 読み込んだ `RoadGraph` を保持して経路を繰り返し引く actor。FR-14 の3秒リルートの前提 |
 | `SpeechAnnouncer.swift` | `AVAudioSession` (.playback/.voicePrompt) + `AVSpeechSynthesizer` で案内文を読み上げる ([ADR-0007](adr/0007-voice-guidance.md)) |

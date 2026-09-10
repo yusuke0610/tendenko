@@ -73,7 +73,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 if session.isActive, !session.hasArrived { coordinator.beginGuidance() }
-            } else {
+            } else if phase == .background {
                 coordinator.endGuidance()
             }
         }

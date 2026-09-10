@@ -41,6 +41,8 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
     /// significant location change の配信は数百 m 級で届くことがあり、それを始点にすると
     /// 別の街区から案内が始まる。メッシュ判定 (約 10km 四方) には粗い測位でも足りる。
     private static let routeOriginAccuracyM: CLLocationAccuracy = 100
+    /// 案内中の追従に使う水平精度の上限 (m)。逸脱許容幅 40m に対して十分な余裕を取る。
+    private static let guidanceAccuracyM: CLLocationAccuracy = 20
     /// 経路の始点として受け入れる測位の古さの上限 (秒)。キャッシュされた古い位置を掴まない
     private static let routeOriginMaxAge: TimeInterval = 120
     /// 平時の測位精度。メッシュ判定 (約 10km 四方) には粗くて足りるが、経路の始点に使うので 10m 級
@@ -169,7 +171,7 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         // 通すと毎秒ネットワークを叩くことになる。追従に必要なのは現在地の更新だけ。
         // メッシュをまたいだ場合だけは通常の経路に落とし、新しい地域のパッケージへ切り替える
         if isGuiding, mesh == currentMesh {
-            if let origin { currentLocation = origin }
+            if accuracyM <= Self.guidanceAccuracyM, let origin { currentLocation = origin }
             return
         }
 

@@ -110,6 +110,9 @@ public enum GuidanceNarration {
             state.announcedStepIndex = tracking.stepIndex
             state.announcedCueM = nil
             state.wasOffRoute = tracking.isOffRoute
+            if tracking.isOffRoute {
+                state.lastRerouteAt = now
+            }
             return Narration(texts: openingTexts(steps: steps, summary: summary,
                                                  stepIndex: tracking.stepIndex),
                              needsReroute: false, state: state)

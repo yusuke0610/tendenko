@@ -224,6 +224,23 @@ struct NarrationOffRouteTests {
         #expect(n.state.wasOffRoute)
     }
 
+    @Test("開始時から逸脱が続いても再試行間隔を空ける")
+    func retriesAfterIntervalFromOffRouteOpening() {
+        let openedOffRoute = GuidanceNarration.next(
+            tracking: tracking(stepIndex: 1, offRoute: true),
+            steps: shortLegs, summary: nil, previous: .initial, now: 100)
+        let immediate = GuidanceNarration.next(
+            tracking: tracking(stepIndex: 1, offRoute: true),
+            steps: shortLegs, summary: nil, previous: openedOffRoute.state, now: 101)
+        let retry = GuidanceNarration.next(
+            tracking: tracking(stepIndex: 1, offRoute: true),
+            steps: shortLegs, summary: nil, previous: immediate.state, now: 110)
+
+        #expect(openedOffRoute.state.lastRerouteAt == 100)
+        #expect(!immediate.needsReroute)
+        #expect(retry.needsReroute)
+    }
+
     @Test("逸脱中は進行も進捗も読まない")
     func silentWhileOffRoute() {
         let first = GuidanceNarration.next(tracking: tracking(stepIndex: 1, offRoute: true),

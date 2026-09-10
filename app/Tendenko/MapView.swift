@@ -30,6 +30,7 @@ struct MapView: UIViewRepresentable {
         // ODbL 等の帰属は SwiftUI 側で常時表示するため、MapLibre 既定のボタンは隠す。
         mapView.attributionButton.isHidden = true
         mapView.showsUserLocation = showsUserLocation
+        mapView.userTrackingMode = showsUserLocation ? .follow : .none
         context.coordinator.lastStyleURL = styleURL
         context.coordinator.route = routePolyline
         context.coordinator.inundation = inundationSegments

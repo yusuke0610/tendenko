@@ -88,6 +88,7 @@ final class GuidanceSession {
     /// 別の地域に移ったのなら、前の地域で到達したことは次の案内を止める理由にならない。
     func reset() {
         end()
+        announcer.stop()
         polyline = []
         steps = []
         summary = nil

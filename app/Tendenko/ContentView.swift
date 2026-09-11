@@ -227,8 +227,13 @@ struct ContentView: View {
     }
 
     /// 経路を引いた始点から現在地がこれ以上離れていたら、その探索結果は捨てる (m)。
+    ///
+    /// **逸脱の許容幅と同じ値を使う (ドメイン層の `TrackingStyle` から取る)。** ここが逸脱の
+    /// 許容幅より広いと、確定した瞬間に逸脱と判定される経路で案内を始めうる。開始時の逸脱は
+    /// `GuidanceNarration` がリルートを抑止するので、次の再試行 (`rerouteRetryIntervalS`)
+    /// まで直らず、FR-14 の 3 秒に間に合わない。
     /// 徒歩なら数十秒ぶんの移動にあたり、探索 (端末内・数百ms 級) の間に超えることはまず無い
-    private static let staleOriginToleranceM: Double = 50
+    private static let staleOriginToleranceM = TrackingStyle().offRouteToleranceM
 
     /// 経路の始点。判断は `RouteOrigin` に切り出してテストしている。
     private func startPoint() -> GeoPoint {

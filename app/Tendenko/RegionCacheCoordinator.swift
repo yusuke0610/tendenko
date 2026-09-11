@@ -156,9 +156,6 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         // horizontalAccuracy が負の測位は無効値 (CoreLocation の規約)
         guard accuracyM >= 0 else { return }
 
-        locationRevision += 1
-        let revision = locationRevision
-
         // 経路の始点に使えるのは、十分な精度で、かつ古すぎない測位だけ。
         // 粗い測位でもメッシュの判定 (約 10km 四方) には使えるので、そちらは下で続行する。
         let origin: GeoPoint? = (accuracyM <= Self.routeOriginAccuracyM
@@ -174,6 +171,13 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
             if accuracyM <= Self.guidanceAccuracyM, let origin { currentLocation = origin }
             return
         }
+
+        // **世代を進めるのはここから下だけ。** 上の早期 return は取得を起こさないので、
+        // そこで世代を進めると、メッシュをまたいだ直後に走り出した取得が次の測位 (1Hz) で
+        // 必ず破棄される。以後は同じメッシュの更新が早期 return に入り続けて再取得もされず、
+        // 新しい地域のパッケージが永久に公開されない
+        locationRevision += 1
+        let revision = locationRevision
 
         if mesh == currentMesh {
             // 同じメッシュなら、公開済みのパッケージと組み合わせて問題ない

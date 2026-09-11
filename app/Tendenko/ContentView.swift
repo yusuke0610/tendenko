@@ -138,6 +138,11 @@ struct ContentView: View {
     /// 届くため、以前のように位置更新のたびに経路を再計算すると探索が回り続ける。
     /// 案内中の位置更新は追従に流し、経路を引き直すのは逸脱 (FR-14) のときだけにする。
     private func locationChanged() async {
+        // **背景では追従も探索もしない (ADR-0008)。** `endGuidance()` で連続測位を止めても、
+        // 平時の significant location change は背景にも届く。`session.isActive` は
+        // 復帰時に進行を引き継ぐため true のままなので、ここで止めないと見ていない画面のために
+        // 発話とリルートが走る。`.inactive` は `isVisible` が true のままなので従来どおり追従する
+        guard isVisible else { return }
         guard let location = coordinator.currentLocation else { return }
         // 到達後は引き直さない (FR-16)。避難場所に着いた人に次の経路は要らないし、
         // 避難場所を始点に引き直すと「その場から自分自身への経路」を案内し直すことになる

@@ -28,6 +28,12 @@ struct ContentView: View {
     /// 表示中パッケージの経路探索器。グラフを保持してリルートを 3 秒に収める (FR-14)
     @State private var engine: RouteEngine?
     @Environment(\.scenePhase) private var scenePhase
+    /// アプリが画面に出ているか (背景に回っていないか)。
+    ///
+    /// **非同期の経路探索から見るのはこちらで、`scenePhase` を直接読まない。** `@Environment` は
+    /// View のコピーごとの値なので、Task を作った時点のコピーに閉じ込められた古い値を返しうる。
+    /// `@State` なら背景移行の反映が走行中の Task にも届く
+    @State private var isVisible = true
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -55,6 +61,7 @@ struct ContentView: View {
             }
         }
         .task {
+            isVisible = scenePhase != .background
             startGlyphServer()
             coordinator.start()
             await presentMap()
@@ -71,10 +78,18 @@ struct ContentView: View {
         }
         // 案内フェーズはフォアグラウンドに閉じる (ADR-0008)。背景測位は FR-10 と一体で決める
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                if session.isActive, !session.hasArrived { coordinator.beginGuidance() }
-            } else if phase == .background {
+            guard phase != .inactive else { return } // 通知バナー等で一瞬入るだけ。追従は切らない
+            isVisible = phase != .background
+            guard phase == .active else {
                 coordinator.endGuidance()
+                return
+            }
+            if session.isActive, !session.hasArrived {
+                coordinator.beginGuidance()
+            } else if !session.hasArrived {
+                // 背景にいる間に完了した探索は案内を開始していない (`startGuidance` が弾く)。
+                // 復帰した今、現在地から引き直して案内に入る
+                Task { await refreshRoute() }
             }
         }
     }
@@ -189,6 +204,10 @@ struct ContentView: View {
     /// **同梱サンプルの経路では案内フェーズに入らない** — 現在地と無関係な経路に追従しても
     /// 意味が無く、連続測位を焚くだけになる。
     private func startGuidance(with result: RouteEngine.Result) {
+        // **バックグラウンドでは案内を始めない (ADR-0008)。** 経路探索は非同期なので、
+        // 画面を離れた後に完了しうる。そこで発話と連続測位を始めると、見ていない画面のために
+        // GPS を焚き続けることになる (NFR-05)。フォアグラウンド復帰時に引き直す
+        guard isVisible else { return }
         guard SampleFallback.shouldAnnounce(regionPath: coordinator.regionPath),
               !result.guidance.isEmpty,
               let origin = coordinator.currentLocation

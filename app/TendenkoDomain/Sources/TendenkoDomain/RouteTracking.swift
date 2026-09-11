@@ -24,8 +24,11 @@ public struct TrackingState: Sendable, Equatable {
     public let isOffRoute: Bool
     /// 目的地に到達したか (FR-16)
     public let hasArrived: Bool
-    /// 次の案内地点までの残距離 (m)。次が無ければ nil。
-    /// 区間が長いときの進捗案内 (「あと◯◯メートル」) に使える
+    /// 次の案内地点までの**道なり**残距離 (m)。次が無ければ nil。
+    /// 区間が長いときの進捗案内 (「あと◯◯メートル」) に使える。
+    ///
+    /// **直線距離ではない。** 迂回する経路では、直線で 200m でも道なりでは数百m〜数km残る。
+    /// 直線距離で進捗案内を出すと、実際にはまだ先の角を「200メートル先」と早く読み上げる
     public let distanceToNextStepM: Double?
     /// 経路上に射影した現在地の、経路始点からの道なり距離 (m)。`stepIndex` と同じく後戻りしない。
     /// **次の更新でそのまま `fromProgressM` に渡す** — 進行を探す範囲をここから決める
@@ -78,16 +81,26 @@ public enum RouteTracker {
         // 直線距離だと、通り過ぎて遠ざかった指示が「近くない」ままなので進行が止まる。
         // **後戻りはしない** — 測位のふらつきで前の指示に戻ると同じ案内を繰り返し読み上げる。
         var index = min(max(fromStepIndex, 0), steps.count)
-        if polyline.count > 1 {
-            let stepProgress = progressOfSteps(steps, polyline: polyline)
+        // 案内地点の道なり距離。進行の判定と残距離の算出で同じ値を使う
+        let stepProgress: [Double]? = polyline.count > 1
+            ? progressOfSteps(steps, polyline: polyline)
+            : nil
+        if let stepProgress {
             while index < steps.count, stepProgress[index] <= traveled {
                 index += 1
             }
         }
 
-        let distanceToNextStepM = index < steps.count
-            ? location.distanceM(to: steps[index].point)
-            : nil
+        // 残距離も**道なり**で測る。進行 (`traveled`) と案内地点が同じ尺度に乗っているので、
+        // 差を取るだけでよい。経路が無い (頂点 1 点以下) 縮退時だけ直線距離に落ちる
+        let distanceToNextStepM: Double?
+        if index >= steps.count {
+            distanceToNextStepM = nil
+        } else if let stepProgress {
+            distanceToNextStepM = max(0, stepProgress[index] - traveled)
+        } else {
+            distanceToNextStepM = location.distanceM(to: steps[index].point)
+        }
 
         return TrackingState(stepIndex: index,
                              offRouteDistanceM: offRouteDistanceM,

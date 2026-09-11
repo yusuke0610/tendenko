@@ -180,7 +180,8 @@ public enum GuidanceNarration {
         return name
     }
 
-    /// 残距離がしきい値を下回ったら、**同じ指示を残距離で読み直す**。
+    /// 残距離 (道なり、`TrackingState.distanceToNextStepM`) がしきい値を下回ったら、
+    /// **同じ指示を残距離で読み直す**。
     ///
     /// 文言を新造せず `GuidanceScript.text(for:distanceM:)` を残距離で呼び直すのは、
     /// 同じ角を進捗と案内地点で違う言い回しにしないため。カーナビと同じ形になる

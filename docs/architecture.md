@@ -79,7 +79,7 @@ flowchart TB
 | `EvacuationRouter.swift` | 経路探索。コストは「最短」ではなく「浸水リスク最小 + 迷いにくさ」(FR-12) |
 | `RouteGeometry.swift` | 経路探索の結果を地図描画用座標に変換 |
 | `GuidanceScript.swift` | 経路 → 音声案内文 (FR-13)。曲がる案内は分岐点でのみ出す ([ADR-0007](adr/0007-voice-guidance.md)) |
-| `RouteTracking.swift` | 現在地への追従 (FR-14 逸脱検知 / FR-16 到達検知)。案内の進行と次の指示までの残距離を返す |
+| `RouteTracking.swift` | 現在地への追従 (FR-14 逸脱検知 / FR-16 到達検知)。案内の進行と次の指示までの道なり残距離を返す |
 | `GuidanceNarration.swift` | 追従結果 → 「今何を喋るか・リルートすべきか」の判断 (FR-14/FR-16)。進捗案内で長い無案内区間を埋める ([ADR-0008](adr/0008-guidance-phase-location.md)) |
 | `EvacuationPhase.swift` | 受信電文からアプリの状態遷移を表す型 (requirements §3.2) |
 | `CachePlanner.swift` | ローリングキャッシュ (現在地 3×3 メッシュ) の保持/退避計画 ([ADR-0004](adr/0004-region-package-delivery.md)) |

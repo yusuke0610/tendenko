@@ -31,7 +31,6 @@ actor RouteEngine {
     /// パッケージ単位で変わらないもの。毎回作り直さない
     private var inundation: [[GeoPoint]] = []
     private var attributions: [String] = []
-    private var loadFailed = false
 
     init(regionPath: String) {
         self.regionPath = regionPath
@@ -58,15 +57,20 @@ actor RouteEngine {
             summary: route.map { GuidanceScript.summary(for: $0, destination: destination) })
     }
 
-    /// 初回だけ SQLite から読む。失敗したら以後は再試行しない
-    /// (同じファイルに対して毎回の測位で I/O を繰り返しても結果は変わらない)。
+    /// 読み込みは初回だけ。ただし**失敗は覚えない — 次の経路更新でやり直す。**
+    ///
+    /// 失敗を永続化すると、一過性の I/O 失敗 (ダウンロード直後の書き込み途中のファイル、
+    /// 一時的な読み取り失敗) 1 回で、そのパッケージの経路探索がアプリ再起動まで死ぬ。
+    /// 避難経路が出ない状態を復旧不能にする理由が無い。
+    ///
+    /// 再試行が I/O を焚き続けることもない。呼び出し元 (`ContentView.refreshRoute`) は
+    /// 位置更新かパッケージ差し替えでしか走らず、読み込みに失敗している間は案内フェーズに
+    /// 入らない (=連続測位も始まらない) ため、位置更新は平時の頻度 (significant change) のまま。
     private func loadIfNeeded() -> RoadGraph? {
         if let graph { return graph }
-        guard !loadFailed else { return nil }
         guard let loaded = try? GraphLoader.load(paths: [regionPath]),
               let shelters = try? ShelterLoader.load(paths: [regionPath])
         else {
-            loadFailed = true
             return nil
         }
         var byNode: [Int64: Shelter] = [:]

@@ -19,7 +19,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: pipeline/go.mod
-          cache-dependency-path: pipeline/go.sum
+          cache-dependency-path: |
+            pipeline/go.sum
+            server/go.sum
       - name: Test (server)
         run: make server-test
       - name: Test (pipeline)

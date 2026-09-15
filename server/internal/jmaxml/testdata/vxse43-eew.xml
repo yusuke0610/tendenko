@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>緊急地震速報（警報）</Title>
+    <DateTime>2026-09-08T12:30:10Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>気象庁本庁</EditorialOffice>
+    <PublishingOffice>気象庁</PublishingOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>緊急地震速報（警報）</Title>
+    <ReportDateTime>2026-09-08T21:30:10+09:00</ReportDateTime>
+    <TargetDateTime>2026-09-08T21:30:00+09:00</TargetDateTime>
+    <EventID>20260908213000</EventID>
+    <InfoType>発表</InfoType>
+    <Serial>3</Serial>
+    <InfoKind>緊急地震速報</InfoKind>
+    <InfoKindVersion>1.1_0</InfoKindVersion>
+    <Headline>
+      <Text>強い揺れに警戒してください。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/" xmlns:jmx_eb="http://xml.kishou.go.jp/jmaxml1/elementBasis1/">
+    <Earthquake>
+      <OriginTime>2026-09-08T21:30:00+09:00</OriginTime>
+      <Hypocenter>
+        <Area>
+          <Name>三陸沖</Name>
+          <Code>181</Code>
+        </Area>
+      </Hypocenter>
+      <jmx_eb:Magnitude type="マグニチュード" description="M8.2">8.2</jmx_eb:Magnitude>
+    </Earthquake>
+    <Intensity>
+      <Forecast>
+        <ForecastInt>
+          <From>6+</From>
+          <To>over</To>
+        </ForecastInt>
+        <Area>
+          <Name>岩手県沿岸北部</Name>
+          <Code>2110</Code>
+          <ForecastInt>
+            <From>6+</From>
+            <To>over</To>
+          </ForecastInt>
+        </Area>
+        <Area>
+          <Name>宮城県北部</Name>
+          <Code>2210</Code>
+          <ForecastInt>
+            <From>5-</From>
+            <To>5+</To>
+          </ForecastInt>
+        </Area>
+      </Forecast>
+    </Intensity>
+  </Body>
+</Report>

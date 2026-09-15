@@ -53,7 +53,7 @@ func newFakeServer(t *testing.T, frames ...string) *fakeServer {
 		f.mu.Lock()
 		f.startCalls++
 		f.mu.Unlock()
-		wsURL := "ws" + strings.TrimPrefix(f.URL, "http") + "/ws"
+		wsURL := "wss" + strings.TrimPrefix(f.URL, "https") + "/ws"
 		_ = json.NewEncoder(w).Encode(map[string]any{"websocket": map[string]string{"url": wsURL}})
 	})
 
@@ -87,7 +87,8 @@ func newFakeServer(t *testing.T, frames ...string) *fakeServer {
 		}
 	})
 
-	f.Server = httptest.NewServer(mux)
+	// 本番と同じ https / wss で話す。socketStart は平文 HTTP を拒否する
+	f.Server = httptest.NewTLSServer(mux)
 	t.Cleanup(f.Close)
 	return f
 }
@@ -143,6 +144,7 @@ func testClient(t *testing.T, f *fakeServer) *Client {
 		APIKey:     "test-key",
 		AppName:    "tendenko-test",
 		BaseURL:    f.URL,
+		HTTPClient: f.Client(),
 		MinBackoff: time.Millisecond,
 		MaxBackoff: 2 * time.Millisecond,
 	})
@@ -243,7 +245,7 @@ func TestSocketStartRequestShape(t *testing.T) {
 		AppName         string   `json:"appName"`
 	}
 	done := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		close(done)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -256,6 +258,7 @@ func TestSocketStartRequestShape(t *testing.T) {
 		Classifications: []string{"telegram.earthquake"},
 		Types:           []string{"VXSE43", "VTSE41"},
 		BaseURL:         srv.URL,
+		HTTPClient:      srv.Client(),
 	})
 	if _, err := c.socketStart(context.Background()); err == nil {
 		t.Fatal("500 はエラーになるはず")
@@ -274,7 +277,7 @@ func TestSocketStartRequestShape(t *testing.T) {
 func TestSocketStartErrorHidesAPIKey(t *testing.T) {
 	const secret = "super-secret-key"
 	// 接続できないアドレスにして HTTPClient.Do を失敗させる
-	c := New(Config{APIKey: secret, BaseURL: "http://127.0.0.1:1"})
+	c := New(Config{APIKey: secret, BaseURL: "https://127.0.0.1:1"})
 
 	_, err := c.socketStart(context.Background())
 	if err == nil {
@@ -304,8 +307,25 @@ func TestRedactURLKeepsCause(t *testing.T) {
 	}
 }
 
+// API キーはクエリ ?key= で渡すため、平文 HTTP に乗せるとそのまま経路上を流れる
+// (CWE-319)。redactURL はログを守るだけで通信は守らない。
+func TestSocketStartRejectsPlaintextBaseURL(t *testing.T) {
+	const secret = "super-secret-key"
+	for _, base := range []string{"http://api.dmdata.jp/v2", "ws://api.dmdata.jp/v2", "https://", ":"} {
+		c := New(Config{APIKey: secret, BaseURL: base})
+		_, err := c.socketStart(context.Background())
+		if err == nil {
+			t.Errorf("BaseURL = %q が受け入れられた", base)
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("エラーに API キーが含まれる: %v", err)
+		}
+	}
+}
+
 func TestSocketStartRequiresAPIKey(t *testing.T) {
-	c := New(Config{BaseURL: "http://example.invalid"})
+	c := New(Config{BaseURL: "https://example.invalid"})
 	if _, err := c.socketStart(context.Background()); err == nil {
 		t.Fatal("API キーなしはエラーになるはず")
 	}

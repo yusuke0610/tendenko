@@ -169,7 +169,13 @@ func (c *Client) session(ctx context.Context, h Handler) error {
 		return fmt.Errorf("socket.start: %w", err)
 	}
 
-	// WS の URL にはチケットが載るため、エラーからも URL を落とす
+	// WS の URL にはチケットが載る。平文 ws:// で繋ぐと資格情報が経路上を流れるため、
+	// 払い出された URL 自体も検査する (エラーにはチケットを含む URL を載せない)
+	if u, err := url.Parse(wsURL); err != nil || u.Scheme != "wss" || u.Host == "" {
+		return errors.New("dmdata: socket.start が wss 以外の URL を返した")
+	}
+
+	// エラーからも URL を落とす
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.cfg.HTTPClient})
 	if err != nil {
 		return fmt.Errorf("dial: %w", redactURL(err))
@@ -294,11 +300,31 @@ func redactURL(err error) error {
 	return err
 }
 
+// socketEndpoint は socket.start のエンドポイントを組み立てる。
+//
+// API キーをクエリ ?key= で渡す (DMDATA API v2 の仕様) 以上、平文 HTTP に乗せると
+// キーがそのまま経路上に流れる (CWE-319)。redactURL はログを守るだけで通信は守らない
+// ため、https 以外は組み立ての時点で拒否する。テストは TLS の httptest を使う。
+func (c *Client) socketEndpoint() (string, error) {
+	u, err := url.Parse(c.cfg.BaseURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", errors.New("dmdata: BaseURL は https でなければならない")
+	}
+	endpoint := u.JoinPath("socket")
+	q := endpoint.Query()
+	q.Set("key", c.cfg.APIKey)
+	endpoint.RawQuery = q.Encode()
+	return endpoint.String(), nil
+}
+
 // socketStart は WebSocket の接続先 URL を払い出す。
-// API キーはクエリ ?key= で渡す (DMDATA API v2 の仕様)。
 func (c *Client) socketStart(ctx context.Context) (string, error) {
 	if c.cfg.APIKey == "" {
 		return "", errors.New("dmdata: API キーが未設定")
+	}
+	endpoint, err := c.socketEndpoint()
+	if err != nil {
+		return "", err
 	}
 	reqBody, err := json.Marshal(map[string]any{
 		"classifications": c.cfg.Classifications,
@@ -309,7 +335,6 @@ func (c *Client) socketStart(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	endpoint := c.cfg.BaseURL + "/socket?key=" + c.cfg.APIKey
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err

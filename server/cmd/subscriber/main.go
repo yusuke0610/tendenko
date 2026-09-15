@@ -10,7 +10,7 @@
 // | PORT | 8080 | ヘルスチェックの待ち受けポート |
 // | DMDATA_API_KEY | (なし) | 未設定なら一次経路を無効化し ATOM だけで動く |
 // | DMDATA_CLASSIFICATIONS | telegram.earthquake | socket.start の classifications |
-// | DMDATA_BASE_URL | https://api.dmdata.jp/v2 | DMDATA API のベース URL |
+// | DMDATA_BASE_URL | https://api.dmdata.jp/v2 | DMDATA API のベース URL (https のみ) |
 // | ATOM_FEED_URL | 気象庁 eqvol.xml | 二次経路のフィード |
 // | ATOM_INTERVAL | 60s | 二次経路のポーリング間隔 |
 // | PUBSUB_PROJECT_ID | (なし) | 未設定なら標準出力へ書く |
@@ -120,16 +120,20 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 		close(listenErr)
 	}()
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
 	logger.Info("subscriber: 起動した", "addr", srv.Addr, "dmdata", ws != nil)
 	runErr := sup.Run(ctx)
+
+	// listenErr を待つ前に待ち受けを畳む。ListenAndServe は Shutdown されるまで
+	// 戻らないため、順序を逆にすると SIGTERM で終われなくなる。
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	shutdownCancel()
+
 	if err := <-listenErr; err != nil {
 		return fmt.Errorf("ヘルスチェックの待ち受けに失敗した: %w", err)
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("ヘルスチェックを停止できない: %w", shutdownErr)
 	}
 	return runErr
 }

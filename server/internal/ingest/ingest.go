@@ -120,8 +120,9 @@ func (s *Supervisor) backfillLoop(ctx context.Context) {
 
 // Handle は生電文 1 通を解析・重複排除して配信する。
 //
-// 配信できなかったときだけエラーを返す。捨てるべき電文 (対象外・訓練・解析不能) は
-// 再試行しても結果が変わらないため、エラーにはしない。
+// エラーを返すのは、配信に失敗したときと、二次経路で解析に失敗したとき。呼び出し元
+// (atomfeed) はこれを見て取得済み記録を取り消し、次回のポーリングで拾い直す。
+// 対象外・訓練/試験の電文は再試行しても結果が変わらないため、エラーにはしない。
 func (s *Supervisor) Handle(ctx context.Context, telegramType string, body []byte, src alert.Source) error {
 	tel, err := jmaxml.Parse(telegramType, body)
 	switch {
@@ -133,6 +134,13 @@ func (s *Supervisor) Handle(ctx context.Context, telegramType string, body []byt
 		return nil
 	case err != nil:
 		s.cfg.Logger.Error("ingest: 電文を解析できない", "type", telegramType, "source", src, "error", err)
+		// 二次経路は同じエントリを取り直せる。切れたダウンロードなどで一時的に壊れた
+		// XML を握り潰すと、取得済み記録の TTL が切れるまで拾い直せない。恒久的に
+		// 壊れた電文をフィードにある間だけ取り直す方が、警報を 1 通落とすより安い。
+		// 一次経路 (WS) には再送が無いため、エラーを返しても意味がない。
+		if src == alert.SourceJMAAtom {
+			return err
+		}
 		return nil
 	}
 

@@ -189,11 +189,28 @@ func TestHandleDoesNotErrorOnDiscardedTelegrams(t *testing.T) {
 	}{
 		{"対象外", "VZSE40", alertXML},
 		{"訓練", "VTSE41", drillXML},
-		{"解析不能", "VTSE41", "<Report>"},
 	} {
 		if err := s.Handle(context.Background(), tc.telegramType, []byte(tc.body), alert.SourceJMAAtom); err != nil {
 			t.Errorf("%s: err = %v, want nil", tc.name, err)
 		}
+	}
+}
+
+// 解析失敗は「壊れた電文」とは限らない (切れたダウンロード等)。二次経路は取り直せる
+// ので、TTL が切れるまで待たずに拾い直せるようエラーを返す。一次経路 (WS) は再送が
+// 無いため、エラーを返しても拾い直せない。
+func TestHandleRetriesParseFailureOnlyForAtom(t *testing.T) {
+	pub := newFakePublisher()
+	s := newSupervisor(t, pub)
+
+	if err := s.Handle(context.Background(), "VTSE41", []byte("<Report>"), alert.SourceJMAAtom); err == nil {
+		t.Error("二次経路の解析失敗がエラーとして返っていない")
+	}
+	if err := s.Handle(context.Background(), "VTSE41", []byte("<Report>"), alert.SourceDMDATA); err != nil {
+		t.Errorf("一次経路の解析失敗: err = %v, want nil", err)
+	}
+	if pub.count() != 0 {
+		t.Errorf("配信 = %d 件、want 0", pub.count())
 	}
 }
 
@@ -223,7 +240,7 @@ func TestEndToEndFromWebSocket(t *testing.T) {
 	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/socket", func(w http.ResponseWriter, _ *http.Request) {
-		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+		wsURL := "wss" + strings.TrimPrefix(srv.URL, "https") + "/ws"
 		_ = json.NewEncoder(w).Encode(map[string]any{"websocket": map[string]string{"url": wsURL}})
 	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +252,8 @@ func TestEndToEndFromWebSocket(t *testing.T) {
 		_ = conn.Write(r.Context(), websocket.MessageText, frame)
 		<-r.Context().Done()
 	})
-	srv = httptest.NewServer(mux)
+	// dmdata は資格情報を平文に載せないため https / wss しか受け付けない
+	srv = httptest.NewTLSServer(mux)
 	defer srv.Close()
 
 	pub := newFakePublisher()
@@ -246,6 +264,7 @@ func TestEndToEndFromWebSocket(t *testing.T) {
 		WS: dmdata.New(dmdata.Config{
 			APIKey:     "test-key",
 			BaseURL:    srv.URL,
+			HTTPClient: srv.Client(),
 			MinBackoff: time.Millisecond,
 			MaxBackoff: 2 * time.Millisecond,
 		}),

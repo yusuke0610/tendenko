@@ -54,8 +54,11 @@ func listenLoopback(t *testing.T) (net.Listener, string) {
 func waitHealthz(t *testing.T, port string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
+	// 応答が止まったまま繋がったままになると deadline を超えて待ち続けるため、
+	// 要求側にも上限を持たせる
+	client := &http.Client{Timeout: time.Second}
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:" + port + "/healthz")
+		resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 		if err == nil {
 			_ = resp.Body.Close()
 			return

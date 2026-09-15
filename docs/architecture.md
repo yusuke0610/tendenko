@@ -41,7 +41,7 @@ flowchart TB
 | 領域 | 状態 |
 |---|---|
 | `pipeline/` | ✅ 実装済み。全国 2,515 メッシュ分のパッケージ生成を実測済み ([ADR-0003](adr/0003-region-package-format.md)) |
-| `app/` (ドメイン層・UI層) | ✅ 実装済み。経路探索・地図描画・オフライン配信・地域パッケージの自動DL・音声案内 (FR-13) まで動作確認済み |
+| `app/` (ドメイン層・UI層) | ✅ 実装済み。経路探索・地図描画・オフライン配信・地域パッケージの自動DL・音声案内 (FR-13)・逸脱リルートと到達検知 (FR-14/FR-16) まで実装済み (実機確認は FR-14/FR-16 が未了) |
 | `infra/` (OpenTofu) | ✅ 定義済み、**本番 `tofu apply` は未実行** (プロジェクトID未確定) |
 | `server/` (subscriber・fanout) | ❌ **未実装**。`cmd/subscriber/main.go`・`cmd/fanout/main.go` は TODO コメントのみのスタブ |
 
@@ -79,7 +79,8 @@ flowchart TB
 | `EvacuationRouter.swift` | 経路探索。コストは「最短」ではなく「浸水リスク最小 + 迷いにくさ」(FR-12) |
 | `RouteGeometry.swift` | 経路探索の結果を地図描画用座標に変換 |
 | `GuidanceScript.swift` | 経路 → 音声案内文 (FR-13)。曲がる案内は分岐点でのみ出す ([ADR-0007](adr/0007-voice-guidance.md)) |
-| `RouteTracking.swift` | 現在地への追従 (FR-14 逸脱検知 / FR-16 到達検知)。案内の進行と次の指示までの残距離を返す |
+| `RouteTracking.swift` | 現在地への追従 (FR-14 逸脱検知 / FR-16 到達検知)。案内の進行と次の指示までの道なり残距離を返す |
+| `GuidanceNarration.swift` | 追従結果 → 「今何を喋るか・リルートすべきか」の判断 (FR-14/FR-16)。進捗案内で長い無案内区間を埋める ([ADR-0008](adr/0008-guidance-phase-location.md)) |
 | `EvacuationPhase.swift` | 受信電文からアプリの状態遷移を表す型 (requirements §3.2) |
 | `CachePlanner.swift` | ローリングキャッシュ (現在地 3×3 メッシュ) の保持/退避計画 ([ADR-0004](adr/0004-region-package-delivery.md)) |
 
@@ -100,11 +101,13 @@ flowchart TB
 | ファイル | 責務 |
 |---|---|
 | `TendenkoApp.swift` | アプリのエントリポイント |
-| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・経路オーバーレイ計算・音声案内の配線 |
+| `ContentView.swift` | 現在地メッシュのDL・キャッシュ表示・音声案内の配線と、`refreshRoute` による経路探索結果の受け取り |
+| `GuidanceSession.swift` | 案内フェーズの追従と発話の配線 (FR-13/FR-14/FR-16)。判断はドメイン層に委ね、分岐を持たない |
+| `RouteEngine.swift` | 読み込んだ `RoadGraph` を保持して経路を繰り返し引く actor。FR-14 の3秒リルートの前提 |
 | `SpeechAnnouncer.swift` | `AVAudioSession` (.playback/.voicePrompt) + `AVSpeechSynthesizer` で案内文を読み上げる ([ADR-0007](adr/0007-voice-guidance.md)) |
 | `MapView.swift` / `OfflineMapStyle.swift` | MapLibre Nativeのラップとオフラインスタイル定義 (地物・ラベルのレイヤー定義) |
 | `GCSPackageFetcher.swift` | 公開GCSバケットからmanifest・パッケージを取得する `PackageFetcher` の本番実装 |
-| `RegionCacheCoordinator.swift` | 位置監視とキャッシュ更新の配線 (`CachePlanner`をアプリに接続) |
+| `RegionCacheCoordinator.swift` | 位置監視とキャッシュ更新の配線 (`CachePlanner`をアプリに接続)。案内フェーズ中だけ連続測位に切り替える ([ADR-0008](adr/0008-guidance-phase-location.md)) |
 | `AppConfig.swift` | 実行時設定値 (`packagesBaseURL`等) |
 
 ### `server/` — 警報検知・プッシュ配信 (Go, Cloud Run, **未実装**)

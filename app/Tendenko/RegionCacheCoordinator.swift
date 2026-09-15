@@ -28,6 +28,8 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
     private(set) var tilesPath: String?
     /// 現在地メッシュの region.sqlite のローカルパス (取得済みなら)。経路探索に使う。
     private(set) var regionPath: String?
+    /// 案内フェーズ中か (ADR-0008)。連続測位の生存区間であり、地図の現在地表示もこれに揃える
+    private(set) var isGuiding = false
 
     private let store: RegionPackageStore?
     private let budgetCount: Int
@@ -39,8 +41,12 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
     /// significant location change の配信は数百 m 級で届くことがあり、それを始点にすると
     /// 別の街区から案内が始まる。メッシュ判定 (約 10km 四方) には粗い測位でも足りる。
     private static let routeOriginAccuracyM: CLLocationAccuracy = 100
+    /// 案内中の追従に使う水平精度の上限 (m)。逸脱許容幅 40m に対して十分な余裕を取る。
+    private static let guidanceAccuracyM: CLLocationAccuracy = 20
     /// 経路の始点として受け入れる測位の古さの上限 (秒)。キャッシュされた古い位置を掴まない
     private static let routeOriginMaxAge: TimeInterval = 120
+    /// 平時の測位精度。メッシュ判定 (約 10km 四方) には粗くて足りるが、経路の始点に使うので 10m 級
+    private static let plannerAccuracy: CLLocationAccuracy = kCLLocationAccuracyNearestTenMeters
 
     /// - Parameter baseURL: 配信ベース URL。nil なら DL せず縮退 (同梱サンプルにフォールバック)。
     init(baseURL: URL?, cacheDirectory: URL, budgetCount: Int) {
@@ -64,7 +70,7 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         // メッシュの判定 (約 10km 四方) だけなら粗くて足りるが、経路の始点に使うので
         // 10m 級を要求する。1km 誤差の始点から探索すると別の街区から案内が始まりうる。
         // 常時 GPS ではなく requestLocation の単発測位なので NFR-05 (電池) への影響は小さい。
-        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        locationManager.desiredAccuracy = Self.plannerAccuracy
         locationManager.requestWhenInUseAuthorization()
         locationManager.requestLocation()
         // significant location change は「移動先のパッケージを先読みする」ための常時監視 (FR-03)。
@@ -74,6 +80,38 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
             locationManager.startMonitoringSignificantLocationChanges()
         }
         status = store == nil ? .degraded("配信URLが未設定です") : .locating
+    }
+
+    // MARK: - 案内フェーズ (ADR-0008)
+
+    /// 案内フェーズに入り、連続測位へ切り替える。
+    ///
+    /// NFR-05 が禁じているのは**平時**の常時 GPS であり、案内フェーズは対象外 (ADR-0008)。
+    /// 有限の区間 (到達・フォアグラウンド離脱・パッケージ差し替えで終わる) に閉じることが前提。
+    func beginGuidance() {
+        guard !isGuiding else { return }
+        isGuiding = true
+        // 逸脱の許容幅は TrackingStyle.offRouteToleranceM = 40m。測位誤差がこれに迫ると
+        // 経路上にいるのに逸脱と判定して誤リルートを繰り返す
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        // FR-14 の 3 秒判定。距離で間引くと停止中・低速時に更新が止まる
+        locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.activityType = .fitness
+        // **既定 (true) だと OS が「移動が止まった」と判断した時点で更新を止める。**
+        // 避難中に無言で追従が死ぬ壊れ方を許容しない
+        locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.startUpdatingLocation()
+    }
+
+    /// 案内フェーズを抜け、平時の測位に戻す。
+    func endGuidance() {
+        guard isGuiding else { return }
+        isGuiding = false
+        locationManager.stopUpdatingLocation()
+        // 平時の設定に戻す (距離フィルタと自動停止は CLLocationManager の既定値)
+        locationManager.desiredAccuracy = Self.plannerAccuracy
+        locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.pausesLocationUpdatesAutomatically = true
     }
 
     // MARK: - CLLocationManagerDelegate (nonisolated → MainActor へホップ)
@@ -118,15 +156,29 @@ final class RegionCacheCoordinator: NSObject, CLLocationManagerDelegate {
         // horizontalAccuracy が負の測位は無効値 (CoreLocation の規約)
         guard accuracyM >= 0 else { return }
 
-        locationRevision += 1
-        let revision = locationRevision
-
         // 経路の始点に使えるのは、十分な精度で、かつ古すぎない測位だけ。
         // 粗い測位でもメッシュの判定 (約 10km 四方) には使えるので、そちらは下で続行する。
         let origin: GeoPoint? = (accuracyM <= Self.routeOriginAccuracyM
             && age <= Self.routeOriginMaxAge) ? GeoPoint(lat: lat, lon: lon) : nil
 
         let mesh = MeshCode(latitude: lat, longitude: lon)
+
+        // **案内フェーズ中の位置更新はパッケージ取得の起点にしない (ADR-0008)。**
+        // 連続測位では更新が 1Hz 級で届くため、ここから下の manifest 取得・DL 判定を
+        // 通すと毎秒ネットワークを叩くことになる。追従に必要なのは現在地の更新だけ。
+        // メッシュをまたいだ場合だけは通常の経路に落とし、新しい地域のパッケージへ切り替える
+        if isGuiding, mesh == currentMesh {
+            if accuracyM <= Self.guidanceAccuracyM, let origin { currentLocation = origin }
+            return
+        }
+
+        // **世代を進めるのはここから下だけ。** 上の早期 return は取得を起こさないので、
+        // そこで世代を進めると、メッシュをまたいだ直後に走り出した取得が次の測位 (1Hz) で
+        // 必ず破棄される。以後は同じメッシュの更新が早期 return に入り続けて再取得もされず、
+        // 新しい地域のパッケージが永久に公開されない
+        locationRevision += 1
+        let revision = locationRevision
+
         if mesh == currentMesh {
             // 同じメッシュなら、公開済みのパッケージと組み合わせて問題ない
             if let origin { currentLocation = origin }

@@ -16,6 +16,13 @@ private func step(_ point: GeoPoint, _ maneuver: Maneuver = .turn(.right)) -> Gu
 /// 北へ 111m 刻みで 5 点の直線経路。
 private let straightLine = (0..<5).map { p(Double($0) * latStep) }
 
+/// 迂回路。北へ 444m 進み、東へ 86m、南へ 444m 戻る。
+/// 終点は出発地点から直線で 86m しか離れていないのに、道なりでは 976m ある。
+/// 進捗案内の残距離を直線で測ると、区間の頭で「200メートル先」と読み上げてしまう
+private let detour = [p(0), p(4 * latStep),
+                      GeoPoint(lat: 39.0 + 4 * latStep, lon: 141.9 + 0.001),
+                      GeoPoint(lat: 39.0, lon: 141.9 + 0.001)]
+
 /// 九十九折り。北へ 444m 登り、東へ 26m ずれて折り返し、444m 南下する。
 /// 折り返した先の区間は往路から 26m しか離れていないので、GPS 誤差で往路より近くなりうる。
 /// 道なり距離では 0m / 444m / 470m / 914m と大きく離れている
@@ -215,6 +222,22 @@ struct RouteTrackerTests {
         #expect(state.stepIndex == 1)
         // 現在地 (111m 地点) から 2 番目の指示 (222m 地点) まで約 111m
         #expect(abs((state.distanceToNextStepM ?? 0) - 111) < 5)
+    }
+
+    @Test("残距離は直線ではなく道なりで測る")
+    func reportsAlongRouteDistanceToNextStep() {
+        // 出発地点にいて、次の指示は迂回路の終点。直線では 86m しか離れていないが、
+        // 道なりでは 976m 残っている。直線で測ると区間の頭で進捗案内を読み上げることになる
+        let detourSteps = [step(detour[0], .start(bearingDeg: 0)),
+                           step(detour[1], .turn(.right)),
+                           step(detour[2], .turn(.right)),
+                           step(detour[3], .arrive(shelterName: "高台"))]
+        let state = RouteTracker.track(location: p(0), steps: detourSteps, polyline: detour,
+                                       fromStepIndex: 3)
+        #expect(state.stepIndex == 3)
+        #expect(!state.hasArrived)
+        #expect(p(0).distanceM(to: detour[3]) < 100) // 直線ならこの距離
+        #expect(abs((state.distanceToNextStepM ?? 0) - 976) < 20)
     }
 
     @Test("すべて通過したら次は無く、残距離も無い")

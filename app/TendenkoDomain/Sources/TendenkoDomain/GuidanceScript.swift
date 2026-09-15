@@ -245,8 +245,13 @@ public enum GuidanceScript {
                             text: text(for: maneuver, distanceM: distanceM, style: style))
     }
 
-    private static func text(for maneuver: Maneuver, distanceM: Double,
-                             style: GuidanceStyle) -> String {
+    /// 案内 1 件の読み上げ文。距離は呼び出し側が差し替えられるよう引数で受ける。
+    ///
+    /// `GuidanceNarration` が進捗案内 (「あと 500 メートル、右に曲がります」) を作るときに、
+    /// **同じ指示を残距離で読み直す**ために公開している。文言を別に持つと、案内地点で読む文と
+    /// 進捗で読む文が食い違い、同じ角を違う言い方で 2 度案内することになる。
+    public static func text(for maneuver: Maneuver, distanceM: Double,
+                            style: GuidanceStyle = GuidanceStyle()) -> String {
         // カーナビと同じ「距離 → 動作」の語順にする。先に距離を言うほうが身構えられる
         let lead = distanceText(distanceM, style: style).map { "\($0)先、" } ?? "この先、"
 
@@ -262,10 +267,25 @@ public enum GuidanceScript {
         case .arrive(let shelterName):
             let place = shelterName ?? "避難場所"
             guard let distance = distanceText(distanceM, style: style) else {
-                return "\(place)に到着しました。その場に留まってください"
+                return arrivedText(shelterName: shelterName)
             }
             return "\(distance)先、\(place)に到着します。到着したら、その場に留まってください"
         }
+    }
+
+    /// 目的地への到達を検知した瞬間に読む文 (FR-16)。
+    ///
+    /// 到達案内 (`Maneuver.arrive`) が経路上の予告として「◯◯メートル先、到着します」と言うのに対し、
+    /// こちらは実際に着いたことを検知して読む。**「解除まで待つ」まで言い切る** — 津波は第一波が
+    /// 最大とは限らず、警報解除前に低地へ戻る行動が最も危険なため、到達で案内を打ち切らない。
+    public static func arrivedText(shelterName: String?) -> String {
+        let place = shelterName ?? "避難場所"
+        return "\(place)に到着しました。その場に留まり、警報が解除されるまで待ってください"
+    }
+
+    /// 経路を外れたことの通知 (FR-14)。リルートの実行そのものは呼び出し側の責務。
+    public static func offRouteText() -> String {
+        "経路を外れました。新しい経路を案内します"
     }
 
     private static func turnText(_ direction: TurnDirection) -> String {

@@ -13,6 +13,12 @@ struct MapView: UIViewRepresentable {
     let zoomLevel: Double
     var routePolyline: [GeoPoint] = []
     var inundationSegments: [[GeoPoint]] = []
+    /// 現在地を表示するか (ADR-0008)。
+    ///
+    /// **案内フェーズ中だけ true にする。** `MLNMapView` は `showsUserLocation` の間、
+    /// 自前の `CLLocationManager` を内部で回すため、常時有効にすると
+    /// `RegionCacheCoordinator` 側を案内フェーズに絞った意味が消える。
+    var showsUserLocation = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -23,6 +29,8 @@ struct MapView: UIViewRepresentable {
         mapView.logoView.isHidden = true
         // ODbL 等の帰属は SwiftUI 側で常時表示するため、MapLibre 既定のボタンは隠す。
         mapView.attributionButton.isHidden = true
+        mapView.showsUserLocation = showsUserLocation
+        mapView.userTrackingMode = showsUserLocation ? .follow : .none
         context.coordinator.lastStyleURL = styleURL
         context.coordinator.route = routePolyline
         context.coordinator.inundation = inundationSegments
@@ -37,6 +45,11 @@ struct MapView: UIViewRepresentable {
             coordinator.lastStyleURL = styleURL
             mapView.styleURL = styleURL
             mapView.setCenter(center, zoomLevel: zoomLevel, animated: false)
+        }
+        if mapView.showsUserLocation != showsUserLocation {
+            mapView.showsUserLocation = showsUserLocation
+            // 案内中は現在地を画面内に保つ。案内フェーズを抜けたら追従も止める
+            mapView.userTrackingMode = showsUserLocation ? .follow : .none
         }
         coordinator.route = routePolyline
         coordinator.inundation = inundationSegments

@@ -286,6 +286,33 @@ struct GuidanceScriptTests {
         #expect(steps.last!.text.contains("留まって")) // FR-16: 到達後はその場に留まる
     }
 
+    @Test("到達を検知したときの案内は解除まで待つことまで言い切る (FR-16)")
+    func arrivedTextWaitsForAllClear() {
+        let text = GuidanceScript.arrivedText(shelterName: "鵜住居小学校")
+        #expect(text.contains("鵜住居小学校"))
+        #expect(text.contains("留まり"))
+        // 第一波が最大とは限らない。解除前に低地へ戻る行動が最も危険なので、そこまで言う
+        #expect(text.contains("解除"))
+    }
+
+    @Test("避難場所名が引けない到達案内は「避難場所」で縮退する")
+    func arrivedTextFallsBack() {
+        #expect(GuidanceScript.arrivedText(shelterName: nil).hasPrefix("避難場所に到着しました"))
+    }
+
+    @Test("逸脱の通知はリルートを予告する (FR-14)")
+    func offRouteTextAnnouncesReroute() {
+        #expect(GuidanceScript.offRouteText().contains("経路を外れました"))
+    }
+
+    @Test("案内文は距離を差し替えて読み直せる (進捗案内で再利用する)")
+    func textIsReusableWithAnotherDistance() {
+        #expect(GuidanceScript.text(for: .turn(.right), distanceM: 500)
+            == "500メートル先、右に曲がります")
+        #expect(GuidanceScript.text(for: .turn(.right), distanceM: 200)
+            == "200メートル先、右に曲がります")
+    }
+
     @Test("避難場所が分からない場合も到達を案内する (縮退)")
     func arriveWithoutShelterName() {
         let g = graph([edge(1, 2, bearing: 0)])

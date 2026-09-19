@@ -238,6 +238,63 @@ func TestReconnectsAndSignalsBackfill(t *testing.T) {
 	}
 }
 
+// 通常の切断でバックオフを伸ばすと、切断を繰り返すうちに再接続が MaxBackoff まで
+// 遅れ、ATOM バックフィルもそのぶん遅れる。維持できた接続のあとは初期値に戻ること。
+//
+// 修正前のコードはこのテストで落ちる (再接続 20 回に MaxBackoff 由来の待ちが積もり、
+// deadline を超える)。
+func TestResetsBackoffAfterEstablishedConnection(t *testing.T) {
+	f := newFakeServer(t)
+	f.setCloseAfterFrames()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	rec := newRecorder()
+	c := New(Config{
+		APIKey:     "test-key",
+		BaseURL:    f.URL,
+		HTTPClient: f.Client(),
+		MinBackoff: time.Millisecond,
+		MaxBackoff: time.Second,
+		// 接続できた時点で「正常に張れた」とみなす。実運用の既定は 30 秒
+		StableConnection: time.Nanosecond,
+	})
+	go func() { _ = c.Run(ctx, rec) }()
+
+	// 初期値のままなら 20 回で 20ms ほど。伸びていくなら 10 秒近くかかる
+	const want = 20
+	for i := range want {
+		select {
+		case <-rec.connected:
+		case <-ctx.Done():
+			t.Fatalf("%d 回目の接続が来なかった (再接続が遅れている)", i+1)
+		}
+	}
+}
+
+func TestNextBackoff(t *testing.T) {
+	cfg := Config{MinBackoff: time.Second, MaxBackoff: 30 * time.Second, StableConnection: 30 * time.Second}
+	for _, tc := range []struct {
+		name    string
+		current time.Duration
+		held    time.Duration
+		want    time.Duration
+	}{
+		{"初回", 0, 0, time.Second},
+		{"接続前の失敗は倍にする", time.Second, 0, 2 * time.Second},
+		{"MaxBackoff で止まる", 16 * time.Second, 0, 30 * time.Second},
+		{"MaxBackoff を超えない", 30 * time.Second, 0, 30 * time.Second},
+		{"維持できた接続のあとは初期値に戻す", 30 * time.Second, 30 * time.Second, time.Second},
+		{"繋いだ直後に落ちるなら倍にする", 4 * time.Second, time.Second, 8 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cfg.nextBackoff(tc.current, tc.held); got != tc.want {
+				t.Errorf("nextBackoff(%v, %v) = %v, want %v", tc.current, tc.held, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSocketStartRequestShape(t *testing.T) {
 	var got struct {
 		Classifications []string `json:"classifications"`

@@ -1,9 +1,10 @@
 // Package dmdata は DMDATA.jp API v2 の WebSocket を購読する一次経路 (requirements §3.3)。
 //
 // Cloud Run のインスタンスは予告なく入れ替わるため、切断は異常ではなく常態として扱う
-// (ADR-0001)。Run は ctx が切れるまで指数バックオフで再接続し続け、接続が確立するたびに
+// (ADR-0001)。Run は ctx が切れるまで再接続し続け、接続が確立するたびに
 // Handler.Connected を呼ぶ。呼ばれた側は ATOM バックフィルを走らせて切断中の穴を埋める
-// (ADR-0008)。
+// (ADR-0008)。再接続の間隔を伸ばすのは接続できなかったときだけで、維持できていた接続が
+// 切れた場合は初期値に戻す (nextBackoff)。
 //
 // 注意: 本パッケージのプロトコル理解は非公式クライアントのソースに依拠した二次情報であり、
 // DMDATA 公式リファレンスと未照合である (開発環境から dmdata.jp へ到達できない)。
@@ -66,7 +67,10 @@ type Config struct {
 	// MinBackoff / MaxBackoff は再接続間隔。ゼロなら既定値を使う。
 	MinBackoff time.Duration
 	MaxBackoff time.Duration
-	now        func() time.Time
+	// StableConnection は「正常に張れた接続」とみなす最短の維持時間。これ以上
+	// 維持できた接続が切れたときは再接続間隔を MinBackoff に戻す。ゼロなら既定値。
+	StableConnection time.Duration
+	now              func() time.Time
 }
 
 // Client は DMDATA.jp の WebSocket 購読クライアント。複数 goroutine から使える。
@@ -78,8 +82,8 @@ type Client struct {
 	lastActivity time.Time
 }
 
-// New は購読クライアントを作る。BaseURL・HTTPClient・Logger・バックオフ間隔は
-// 未設定なら既定値を使う。
+// New は購読クライアントを作る。BaseURL・HTTPClient・Logger・バックオフ間隔・
+// StableConnection は未設定なら既定値を使う。
 func New(cfg Config) *Client {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = DefaultBaseURL
@@ -95,6 +99,9 @@ func New(cfg Config) *Client {
 	}
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 30 * time.Second
+	}
+	if cfg.StableConnection <= 0 {
+		cfg.StableConnection = 30 * time.Second
 	}
 	if cfg.now == nil {
 		cfg.now = time.Now
@@ -135,23 +142,39 @@ func (c *Client) setConnected(v bool) {
 // Run は ctx が切れるまで購読し続ける。個々の接続失敗はバックオフして再試行し、
 // エラーを返さない。返るのは ctx がキャンセルされたときだけ。
 func (c *Client) Run(ctx context.Context, h Handler) error {
-	backoff := c.cfg.MinBackoff
+	var backoff time.Duration
 	for {
-		err := c.session(ctx, h)
+		held, err := c.session(ctx, h)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		c.cfg.Logger.Warn("dmdata: 接続が切れた。再接続する", "error", err, "backoff", backoff)
+		backoff = c.cfg.nextBackoff(backoff, held)
+		c.cfg.Logger.Warn("dmdata: 接続が切れた。再接続する", "error", err, "held", held, "backoff", backoff)
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(jitter(backoff)):
 		}
-		if backoff *= 2; backoff > c.cfg.MaxBackoff {
-			backoff = c.cfg.MaxBackoff
-		}
 	}
+}
+
+// nextBackoff は接続が 1 回切れたあとの待ち時間を返す。held は切れた接続を維持できた
+// 時間 (接続する前に失敗したなら 0)。
+//
+// 通常の切断 (Cloud Run の入れ替え、DMDATA 側の再起動) までバックオフの対象にすると、
+// 切断を繰り返すうちに間隔が MaxBackoff まで伸び、再接続と ATOM バックフィルが
+// そのぶん遅れる。津波警報の一次経路でこれは許容できないため、StableConnection 以上
+// 維持できた接続は「正常に張れていた」とみなして間隔を初期値に戻す。
+//
+// 逆に、間隔を伸ばすべきなのは繋がらない場合と繋いだ直後に落ちる場合 (資格情報の失効、
+// 同時接続数の超過、契約範囲外の購読指定) である。これらは再試行を速めても直らず、
+// 速めるほど DMDATA の API を叩き続けることになる。
+func (cfg Config) nextBackoff(current, held time.Duration) time.Duration {
+	if current <= 0 || held >= cfg.StableConnection {
+		return cfg.MinBackoff
+	}
+	return min(current*2, cfg.MaxBackoff)
 }
 
 // jitter は full jitter。再接続が同時に殺到して DMDATA 側を叩かないようにする。
@@ -162,27 +185,30 @@ func jitter(d time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(d))) + d/2
 }
 
-// session は 1 回の接続を張り、切れるまで読み続ける。
-func (c *Client) session(ctx context.Context, h Handler) error {
+// session は 1 回の接続を張り、切れるまで読み続ける。戻り値の time.Duration は
+// 接続を維持できた時間で、接続が確立する前に失敗したときは 0。Run はこれで
+// 「通常の切断」と「そもそも繋がらない」を見分ける。
+func (c *Client) session(ctx context.Context, h Handler) (time.Duration, error) {
 	wsURL, err := c.socketStart(ctx)
 	if err != nil {
-		return fmt.Errorf("socket.start: %w", err)
+		return 0, fmt.Errorf("socket.start: %w", err)
 	}
 
 	// WS の URL にはチケットが載る。平文 ws:// で繋ぐと資格情報が経路上を流れるため、
 	// 払い出された URL 自体も検査する (エラーにはチケットを含む URL を載せない)
 	if u, err := url.Parse(wsURL); err != nil || u.Scheme != "wss" || u.Host == "" {
-		return errors.New("dmdata: socket.start が wss 以外の URL を返した")
+		return 0, errors.New("dmdata: socket.start が wss 以外の URL を返した")
 	}
 
 	// エラーからも URL を落とす
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.cfg.HTTPClient})
 	if err != nil {
-		return fmt.Errorf("dial: %w", redactURL(err))
+		return 0, fmt.Errorf("dial: %w", redactURL(err))
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(readLimit)
 
+	establishedAt := c.cfg.now()
 	c.setConnected(true)
 	defer c.setConnected(false)
 	h.Connected(ctx)
@@ -190,11 +216,11 @@ func (c *Client) session(ctx context.Context, h Handler) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			return err
+			return c.cfg.now().Sub(establishedAt), err
 		}
 		c.touch()
 		if err := c.dispatch(ctx, conn, data, h); err != nil {
-			return err
+			return c.cfg.now().Sub(establishedAt), err
 		}
 	}
 }

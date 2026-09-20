@@ -161,13 +161,28 @@ func Parse(telegramType string, data []byte) (Telegram, error) {
 		return Telegram{}, fmt.Errorf("%w: %q", ErrNotOperational, s)
 	}
 
+	// EventID と ReportDateTime は同一性キー (ADR-0008) の骨格。どちらかが欠けると
+	// 別個の電文が同じキーに潰れ、2 通目以降が重複として捨てられる。ReportDateTime を
+	// 解釈できないときも同じで、ゼロ値 (西暦 1 年) のまま配信してはならない。
+	//
+	// Serial と InfoKind をここで必須にしないのは、気象庁 XML でこれらが省略されうるかを
+	// 一次情報で確認できていないためである。EventID + ReportedAt があればキーは潰れないので、
+	// 空の続報番号 1 つで実際の津波警報を落とす方が高くつく (ADR-0008 の照合待ち項目)。
+	if r.Head.EventID == "" {
+		return Telegram{}, errors.New("jmaxml: Head/EventID が空")
+	}
+	reportedAt, err := time.Parse(time.RFC3339, r.Head.ReportDateTime)
+	if err != nil {
+		return Telegram{}, fmt.Errorf("jmaxml: Head/ReportDateTime を解釈できない: %q", r.Head.ReportDateTime)
+	}
+
 	tel := Telegram{
 		Type:       telegramType,
 		EventID:    r.Head.EventID,
 		Serial:     r.Head.Serial,
 		InfoType:   r.Head.InfoType,
 		InfoKind:   r.Head.InfoKind,
-		ReportedAt: parseTime(r.Head.ReportDateTime),
+		ReportedAt: reportedAt,
 		Headline:   r.Head.Headline.Text,
 	}
 
@@ -185,11 +200,19 @@ func Parse(telegramType string, data []byte) (Telegram, error) {
 	case "VTSE41":
 		tel.Areas = tsunamiAreas(r.Body.Tsunami.Forecast)
 		tel.MaxCategory = maxCategory(tel.Areas)
-		// 電文そのものの取消、または全地域が解除なら解除として扱う
-		if r.Head.InfoType == "取消" || tel.MaxCategory == "" {
+		// 解除と判断するのは、電文そのものの取消か、全地域の解除を実際に確認できたときだけ。
+		// MaxCategory が空であることを解除の証拠に使ってはならない: maxCategory は既知の
+		// 4 カテゴリ以外をすべて空で返すため、Forecast を取り出せなかった電文や表記の
+		// 違う電文まで「全解除」として配信してしまう。カテゴリの表記は一次情報と未照合
+		// (ADR-0008) なので、判定できない電文は解析エラーにして落とす。実際の警報を
+		// 解除として流すのは、このプロダクトで最も避けるべき事故である。
+		switch {
+		case r.Head.InfoType == "取消" || allAreasCleared(tel.Areas):
 			tel.Kind = KindAllClear
-		} else {
+		case tel.MaxCategory != "":
 			tel.Kind = KindTsunamiAlert
+		default:
+			return Telegram{}, fmt.Errorf("jmaxml: VTSE41 の警戒レベルを判定できない (地域 %d 件)", len(tel.Areas))
 		}
 	case "VTSE51":
 		tel.Kind = KindTsunamiInfo
@@ -229,6 +252,31 @@ func maxCategory(areas []Area) string {
 		}
 	}
 	return best
+}
+
+// allAreasCleared は全地域が解除カテゴリかを返す。地域が 1 件も無い場合は false:
+// 空の地域一覧を全解除と読むと、構造の異なる電文や取り出しに失敗した電文が
+// 「解除」になってしまう。
+func allAreasCleared(areas []Area) bool {
+	if len(areas) == 0 {
+		return false
+	}
+	for _, a := range areas {
+		if !clearedCategory(a.Category) {
+			return false
+		}
+	}
+	return true
+}
+
+// clearedCategory は解除を表す警戒レベルかを返す。
+//
+// 解除の実際の表記は一次情報 (気象庁「電文毎の解説資料」) と未照合である (ADR-0008)。
+// 「津波警報解除」「津波注意報解除」のような表記の揺れを取りこぼさないため部分一致で見る。
+// 津波の心配がないことを示す「津波なし」も解除として扱う。
+func clearedCategory(name string) bool {
+	name = strings.TrimSpace(name)
+	return name == "津波なし" || strings.Contains(name, "解除")
 }
 
 func parseTime(s string) time.Time {

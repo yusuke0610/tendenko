@@ -295,6 +295,20 @@ func TestNextBackoff(t *testing.T) {
 	}
 }
 
+// MaxBackoff は実際の待機時間の上限でなければならない。分布が d を超えると、
+// 再接続と ATOM バックフィルが MaxBackoff より遅れる。
+func TestJitterStaysWithinBound(t *testing.T) {
+	const d = 30 * time.Second
+	for range 1000 {
+		if got := jitter(d); got < 0 || got > d {
+			t.Fatalf("jitter(%v) = %v, want 0〜%v", d, got, d)
+		}
+	}
+	if got := jitter(0); got != 0 {
+		t.Errorf("jitter(0) = %v, want 0", got)
+	}
+}
+
 func TestSocketStartRequestShape(t *testing.T) {
 	var got struct {
 		Classifications []string `json:"classifications"`

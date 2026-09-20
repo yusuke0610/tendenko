@@ -178,12 +178,15 @@ func (cfg Config) nextBackoff(current, held time.Duration) time.Duration {
 	return min(current*2, cfg.MaxBackoff)
 }
 
-// jitter は full jitter。再接続が同時に殺到して DMDATA 側を叩かないようにする。
+// jitter は full jitter (0〜d の一様乱数)。再接続が同時に殺到して DMDATA 側を
+// 叩かないようにする。上限を d に収めるのは、MaxBackoff を実際の待機時間の上限として
+// 守るため: d/2〜1.5d のような分布にすると、待機が MaxBackoff を最大 50% 超え、
+// 再接続と ATOM バックフィルがそのぶん余計に遅れる。
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0
 	}
-	return time.Duration(rand.Int64N(int64(d))) + d/2
+	return time.Duration(rand.Int64N(int64(d) + 1))
 }
 
 // session は 1 回の接続を張り、切れるまで読み続ける。戻り値の time.Duration は

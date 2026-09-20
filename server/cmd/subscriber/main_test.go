@@ -117,3 +117,27 @@ func TestRunFailsWhenHealthPortIsBusy(t *testing.T) {
 		t.Fatal("待ち受けに失敗しても run が戻らない")
 	}
 }
+
+// ゼロ以下の期間を素通しすると設定ミスが黙って通る。DEDUP_TTL が 0 なら同じ電文を
+// 両経路から二重配信し、HEALTH_MAX_SILENCE が 0 なら受信していても healthy にならない。
+func TestEnvDurationRejectsNonPositiveAndBroken(t *testing.T) {
+	const fallback = 6 * time.Hour
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", fallback},
+		{"0", fallback},
+		{"0s", fallback},
+		{"-1s", fallback},
+		{"どうかしている", fallback},
+		{"90s", 90 * time.Second},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("TENDENKO_TEST_DURATION", tc.value)
+			if got := envDuration("TENDENKO_TEST_DURATION", fallback); got != tc.want {
+				t.Errorf("envDuration(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}

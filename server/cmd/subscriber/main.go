@@ -169,9 +169,12 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	if v == "" {
 		return fallback
 	}
+	// ゼロ以下も既定値に戻す。DEDUP_TTL が 0 なら dedup.Memory は記録を毎回期限切れと
+	// して掃くため同じ電文を両経路から二重配信し、HEALTH_MAX_SILENCE が 0 なら
+	// 受信していても healthy にならない。設定ミスが黙って通る方が危ない。
 	d, err := time.ParseDuration(v)
-	if err != nil {
-		slog.Warn("subscriber: 期間を解釈できない。既定値を使う", "key", key, "value", v, "default", fallback)
+	if err != nil || d <= 0 {
+		slog.Warn("subscriber: 期間が不正。既定値を使う", "key", key, "value", v, "default", fallback)
 		return fallback
 	}
 	return d

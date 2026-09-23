@@ -29,12 +29,15 @@ server-lint: ## server/ を golangci-lint でチェック
 
 # 東京都・香川県は A40 にも県オープンデータにも無く、ハザードマップポータルサイトの
 # ラスタタイルから変換する (ADR-0003)。タイル取得はネットワーク律速で時間がかかるため
-# 別ターゲットにしてある (make pipeline-fetch-raster)。取得済みなら normalize が拾う。
+# 別ターゲットにしてある (make pipeline-fetch-raster)。取得が完了していれば normalize が拾う。
+# 判定は tiles/ ではなく mosaic-tiles.txt (fetch が完了時にだけ書く) で行う — 中断した
+# fetch の中間状態を正規データとして流さないため。1 県でも失敗したらその場で止める
+# (for の終了コードは最後の反復だけなので、|| exit 1 が無いと後続の成功で失敗が隠れる)。
 pipeline-normalize-data: ## 浸水想定区域 (A40 + 福井県 + 東京都/香川県)・避難場所の実データを正規化 GeoJSON に変換 (取得元は ADR-0003)
 	cd pipeline && ./scripts/normalize-fukui.sh
 	cd pipeline && for p in tokyo kagawa; do \
-		if [ -d "data/$$p/tiles" ]; then ./scripts/normalize-raster-tsunami.sh $$p; \
-		else echo "skip: $$p (data/$$p/tiles が無い。make pipeline-fetch-raster で取得)"; fi; \
+		if [ -f "data/$$p/mosaic-tiles.txt" ]; then ./scripts/normalize-raster-tsunami.sh $$p || exit 1; \
+		else echo "skip: $$p (data/$$p/mosaic-tiles.txt が無い。make pipeline-fetch-raster で取得)"; fi; \
 	done
 	cd pipeline && ./scripts/normalize-a40.sh
 	cd pipeline && ./scripts/normalize-shelters.sh

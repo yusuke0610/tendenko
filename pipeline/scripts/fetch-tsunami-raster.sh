@@ -110,6 +110,9 @@ if [ "${1:-}" = "--fetch-one" ]; then
 fi
 
 # --- 本体 -------------------------------------------------------------------------------
+# xargs から呼び戻す自身の絶対パスは cd の前に確定する (cd の後に "$(dirname "$0")" を
+# 解決すると、リポジトリルートから相対パスで起動したときに壊れる)。
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
 
 name=${1:-}
@@ -149,6 +152,10 @@ rm -rf "$work"
 mkdir -p "$work" "$FTR_TILEDIR"
 coverage=data/$name/coverage.txt
 dirlist=data/$name/mosaic-tiles.txt
+# mosaic-tiles.txt は「fetch が最後まで完了した」印を兼ねる (normalize と Makefile はこの
+# 有無で判定する)。前回の完了分が残ったまま今回が途中で止まると、中間状態が完了扱いに
+# なるので最初に消し、完了時にだけ書き直す。
+rm -f "$dirlist"
 
 # bbox を指定 zoom の XYZ タイル座標へ (標準の slippy map 式)。
 # x = (lon+180)/360 * 2^z, y = (1 - ln(tan φ + sec φ)/π)/2 * 2^z
@@ -182,6 +189,16 @@ echo "# zoom 候補 HIT EMPTY MISS(404)" >> "$coverage"
 # 通信エラーは「データなし」に倒さず、必ず失敗させる (浸水想定が欠けたまま
 # パッケージが出来上がるのを防ぐ)。取得済みタイルはキャッシュされるので再実行は安い。
 abort_on_fail() {
+  # ワーカーが set -eu で結果行を出さずに落ちると (mkdir/mv/.wld 書き込みの失敗など)、
+  # そのタイルは FAIL にすら数えられず「データなし」と同じ扱いで静かに消える。
+  # 候補数と結果行数の一致で検出する。
+  nres=$(wc -l < "$work/res" | tr -d ' ')
+  ncand=$(wc -l < "$work/cand" | tr -d ' ')
+  if [ "$nres" -ne "$ncand" ]; then
+    echo "error: z$1 で候補 $ncand 枚中 $nres 枚しか結果が返りませんでした (ワーカー異常終了)" >&2
+    tail -5 "$work/err" | sed 's/^/  /' >&2
+    exit 1
+  fi
   fails=$(grep -c '^FAIL ' "$work/res" || true)
   [ "$fails" -eq 0 ] && return 0
   echo "error: $fails 枚のタイルで通信エラー・想定外のステータスが発生しました (z$1)" >&2
@@ -197,8 +214,8 @@ while :; do
   enumerate_bbox "$z" > "$work/cand"
   n=$(wc -l < "$work/cand" | tr -d ' ')
   echo "  z$z: 候補 $n 枚を探索..."
-  xargs -P "$jobs" -n 3 "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" --fetch-one \
-    < "$work/cand" > "$work/res" 2>/dev/null || true
+  xargs -P "$jobs" -n 3 "$self" --fetch-one \
+    < "$work/cand" > "$work/res" 2>> "$work/err" || true
   abort_on_fail "$z"
   hits=$(grep -c '^HIT ' "$work/res" || true)
   if [ "$hits" -gt 0 ]; then
@@ -233,8 +250,8 @@ while :; do
   z=$((z + 1))
   n=$(wc -l < "$work/cand" | tr -d ' ')
   echo "  z$z: 候補 $n 枚を取得..."
-  xargs -P "$jobs" -n 3 "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" --fetch-one \
-    < "$work/cand" > "$work/res" 2>/dev/null || true
+  xargs -P "$jobs" -n 3 "$self" --fetch-one \
+    < "$work/cand" > "$work/res" 2>> "$work/err" || true
   abort_on_fail "$z"
   hits=$(grep -c '^HIT ' "$work/res" || true)
 done
@@ -242,8 +259,10 @@ done
 # 最終 zoom で中身のあったタイルだけをモザイクの入力リストにする。全面透過のタイルは
 # マスクに寄与しないので混ぜても結果は同じだが、VRT と読み込みが無駄に太る。
 # (ファイル自体は残す — 再実行時の再取得を避けるキャッシュとして効く)
+# 一時ファイルに書いてから mv し、完了した実行だけがリストを残すようにする。
 grep '^HIT ' "$work/res" | awk -v d="$FTR_TILEDIR" '{ print d "/" $2 "/" $3 "/" $4 ".png" }' \
-  > "$dirlist"
+  > "$dirlist.tmp"
+mv "$dirlist.tmp" "$dirlist"
 
 # 中間 zoom のタイルは降下の探索用でしかない。モザイクに混ざると解像度が食い違うため消す。
 find "$FTR_TILEDIR" -mindepth 1 -maxdepth 1 -type d ! -name "$zoom" -exec rm -rf {} +

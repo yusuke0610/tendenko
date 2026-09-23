@@ -7,7 +7,7 @@
 # (国土地理院、PDL1.0) が配信するラスタタイルで補完する。A40 (normalize-a40.sh) や
 # 福井県 (normalize-fukui.sh) がベクタ (Shapefile) なのに対し、こちらは PNG タイルなので
 # 「色 → 2値マスク → polygonize」の工程が余分に要る。最終フォーマット (県ごとに
-# ST_Union で 1 MultiPolygon、simplify 0.00003度 ≈3m、[lon,lat]) は 3 者とも同じ。
+# ST_Union で 1 MultiPolygon、simplify ≈3m、[lon,lat]) は 3 者とも同じ。
 #
 # ## 浸水域ピクセルの判定
 #
@@ -58,47 +58,63 @@ warn_pct=${UNMATCHED_WARN_PCT:-5}
 dir=data/$name
 tiles=$dir/tiles
 list=$dir/mosaic-tiles.txt
-[ -d "$tiles" ] || { echo "error: $tiles がありません (先に scripts/fetch-tsunami-raster.sh $name を実行してください)" >&2; exit 1; }
+# mosaic-tiles.txt は fetch が最後まで完了したときにだけ書かれる。無ければ fetch が
+# 途中で止まっており、tiles/ には中間 zoom のタイルや取得途中の最終 zoom が混在しうる
+# (解像度の違うタイルが混ざる・浸水域が欠ける) ので、tiles/ 全件での代替はせずに止める。
+[ -f "$list" ] || { echo "error: $list がありません (fetch が完了していません。scripts/fetch-tsunami-raster.sh $name を再実行してください)" >&2; exit 1; }
 
 work=$dir/.normalize-work
 rm -rf "$work"
 mkdir -p "$work"
 
-# fetch 側が「中身のあったタイル」だけを列挙してくれている。無ければ全タイルを使う
-# (全面透過のタイルはマスクに寄与しないので結果は同じ。VRT が太るだけ)。
-if [ -f "$list" ]; then
-  sort "$list" > "$work/tiles.txt"
-else
-  echo "  $list が無いため tiles/ 配下を全件使います"
-  find "$tiles" -name '*.png' | sort > "$work/tiles.txt"
-fi
+# fetch 側が「中身のあったタイル」だけを列挙してくれている。
+sort "$list" > "$work/tiles.txt"
 ntiles=$(wc -l < "$work/tiles.txt" | tr -d ' ')
 [ "$ntiles" -gt 0 ] || { echo "error: $tiles にタイルがありません" >&2; exit 1; }
 echo "normalize: $name ($ntiles タイル)"
 
 # --- 1. モザイク化 -----------------------------------------------------------------------
-# 配信タイルはパレット PNG のことも RGBA のこともあるため、まず先頭 1 枚で形式を見る。
-first=$(head -1 "$work/tiles.txt")
-has_ct=$(gdalinfo -json "$first" | jq -r 'if .bands[0].colorTable then "yes" else "no" end')
-
-if [ "$has_ct" = "yes" ]; then
-  # **パレット PNG はモザイク化の前に 1 枚ずつ RGBA へ展開する。**
-  # gdalbuildvrt は先頭ラスタのカラーテーブルを全タイルに適用してしまい、タイルごとに
-  # パレットが違うと (PNG エンコーダは普通タイル単位で最適化するので珍しくない)
-  # 警告は出るものの静かに誤った色のモザイクになる — 実際に合成タイルで再現し、
-  # 浸水域 0 px という壊れた結果になることを確認した。展開後の VRT は画素をコピーしない
-  # ので、タイル数に対して安価。
-  echo "  パレット PNG を検出 → タイルごとに RGBA へ展開します"
-  mkdir -p "$work/rgba"
-  # shellcheck disable=SC2016 # sh -c に渡す式はここで展開させない
-  xargs -P 4 -I{} sh -c '
+# 配信タイルはパレット PNG のことも RGBA のこともあり、**形式はタイルごとに判定する**
+# (PNG エンコーダはタイル単位で最適化するので、同じ県の中で形式が混在しうる)。
+#
+# **パレット PNG はモザイク化の前に 1 枚ずつ RGBA へ展開する。**
+# gdalbuildvrt は先頭ラスタのカラーテーブルを全タイルに適用してしまい、タイルごとに
+# パレットが違うと警告は出るものの静かに誤った色のモザイクになる — 実際に合成タイルで
+# 再現し、浸水域 0 px という壊れた結果になることを確認した。展開後の VRT は画素を
+# コピーしないので、タイル数に対して安価。
+#
+# 展開後も band 数が揃わない (不透明 RGB と RGBA の混在など) と、gdalbuildvrt は
+# 合わない入力を警告付きで読み飛ばし、その浸水域が静かに消える。よって揃わなければ止める。
+# 各行 "<band数> <モザイク入力パス>"。gdal_translate が失敗したら行を出さない
+# (下で候補数と行数を突き合わせて検出する)。
+mkdir -p "$work/rgba"
+# shellcheck disable=SC2016 # sh -c に渡す式はここで展開させない
+xargs -P 4 -I{} sh -c '
+  if gdalinfo -json "$1" | jq -e ".bands[0].colorTable" >/dev/null; then
     out="$2/$(printf %s "$1" | tr / _).vrt"
-    gdal_translate -q -of VRT -expand rgba "$1" "$out"
-  ' _ {} "$PWD/$work/rgba" < "$work/tiles.txt"
-  find "$work/rgba" -name '*.vrt' | sort > "$work/mosaic-in.txt"
-else
-  cp "$work/tiles.txt" "$work/mosaic-in.txt"
+    gdal_translate -q -of VRT -expand rgba "$1" "$out" && echo "4 $out"
+  else
+    n=$(gdalinfo -json "$1" | jq ".bands | length") && echo "$n $1"
+  fi
+' _ {} "$PWD/$work/rgba" < "$work/tiles.txt" > "$work/classified.raw" || true
+nclassified=$(wc -l < "$work/classified.raw" | tr -d ' ')
+if [ "$nclassified" -ne "$ntiles" ]; then
+  echo "error: $ntiles タイル中 $nclassified タイルしか形式を判定できませんでした" >&2
+  exit 1
 fi
+sort -k2 "$work/classified.raw" > "$work/classified.txt"
+nexpanded=$(grep -c '\.vrt$' "$work/classified.txt" || true)
+if [ "$nexpanded" -gt 0 ]; then
+  echo "  パレット PNG $nexpanded タイルを RGBA へ展開しました"
+fi
+kinds=$(cut -d' ' -f1 "$work/classified.txt" | sort -u | wc -l | tr -d ' ')
+if [ "$kinds" -ne 1 ]; then
+  echo "error: band 構成の異なるタイルが混在しています (パレット展開後の band 数: 枚数)" >&2
+  cut -d' ' -f1 "$work/classified.txt" | sort | uniq -c | sed 's/^/  /' >&2
+  exit 1
+fi
+cut -d' ' -f2- "$work/classified.txt" > "$work/mosaic-in.txt"
+first=$(head -1 "$work/tiles.txt")
 
 # タイル境界でポリゴンが分断されないよう、県内タイルを 1 枚の仮想ラスタに合成してから
 # 処理する (タイル単位で polygonize しない)。位置は fetch 側が書いた .wld、SRS はここで与える。
@@ -206,7 +222,10 @@ echo "  ポリゴン $npoly 片 (EPSG:3857)"
 attribution='ハザードマップポータルサイト (国土地理院) ※タイル画像をポリゴン化'
 out=$dir/$name.dissolved.geojson
 echo "  dissolve + simplify → $out"
-ogr2ogr -f GeoJSON -t_srs EPSG:4326 -makevalid -simplify 0.00003 \
+# -simplify は再投影 (-t_srs) の前に入力 SRS の単位で効く。poly.geojson は EPSG:3857 (m) なので、
+# A40・福井の 0.00003度 (≈3m) に揃えるには地上 3m 相当をメルカトルの m で与える。
+# メルカトルの縮尺は 1/cos(緯度) 倍で、北緯34度付近で 3m × 1.21 ≈ 3.6。
+ogr2ogr -f GeoJSON -t_srs EPSG:4326 -makevalid -simplify 3.6 \
   -lco COORDINATE_PRECISION=6 \
   "$out" "$work/poly.geojson" \
   -dialect sqlite -sql "SELECT ST_Union(geometry) AS geometry, '$attribution' AS attribution FROM poly"

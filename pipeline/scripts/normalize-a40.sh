@@ -74,11 +74,16 @@ done
 #   福井県: 県オープンデータの Shapefile (CC BY 4.0、normalize-fukui.sh、ADR-0003 追記 2026-07-25)
 #   東京都・香川県: ハザードマップポータルサイトのラスタタイル由来
 #                   (PDL1.0、normalize-raster-tsunami.sh、ADR-0003 追記 2026-09-08)
-jq -s '{type: "FeatureCollection", features: [.[].features[]]}' \
-  data/a40/*.dissolved.geojson \
-  $(ls data/fukui/fukui.dissolved.geojson \
-       data/tokyo/tokyo.dissolved.geojson \
-       data/kagawa/kagawa.dissolved.geojson 2>/dev/null) \
+# 入力は位置パラメータに積む ($(ls ...) の素の展開はパスの単語分割に弱いため)。
+set -- data/a40/*.dissolved.geojson
+for extra in data/fukui/fukui.dissolved.geojson \
+  data/tokyo/tokyo.dissolved.geojson \
+  data/kagawa/kagawa.dissolved.geojson; do
+  if [ -f "$extra" ]; then
+    set -- "$@" "$extra"
+  fi
+done
+jq -s '{type: "FeatureCollection", features: [.[].features[]]}' "$@" \
   > data/inundation-japan.geojson
 
 echo "done: data/inundation-japan.geojson"

@@ -34,6 +34,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) は make ターゲットを呼�
 
 ## 次セッションの最優先タスク
 
+0. **警報検知 subscriber の検証と fanout (#24 / #25)** — subscriber は実装済み (ADR-0008。`server/internal/` の jmaxml/alert/dedup/dmdata/atomfeed/publisher/health/ingest)。ただし **DMDATA 未契約・実電文で未検証**であり、そのまま本番投入してはならない。残: (a) 気象庁「電文毎の解説資料」で津波種別コード・解除の表現・対象電文型を照合、(b) DMDATA 公式リファレンスで socket.start と WS メッセージを照合し契約プランを選定 (requirements §9 未決事項 4)、(c) `cmd/fanout` の実装 (#25)、(d) Stage 2 用の Firestore ベース `Deduper`、(e) subscriber の Cloud Run サービス定義。**(a)(b) は開発環境から到達できないドメイン (dmdata.jp / 気象庁) を要するため、ネットワーク到達可能な環境で行う**
 1. **FR-02 (地域パッケージの自動ダウンロード)** — **アプリ側実装は完了** (ADR-0004。MeshCode/CachePlanner/RegionPackageStore/GCSPackageFetcher/RegionCacheCoordinator)。ContentView は現在地メッシュのパッケージを DL してキャッシュから表示し、未取得時は同梱サンプル (584177) にフォールバックする。残: (a) 実 GCS 接続 — infra `tofu apply` + パッケージ upload 後に `AppConfig.packagesBaseURL` を設定 (要 GCP 認証)、(b) A40 条件付き県の除外 (ADR-0002、public 再生成の前提)
 2. **FR-14 (経路逸脱リルート) / FR-16 (目的地到達検知)** — **実装完了、実機確認が未了** (ADR-0007/ADR-0008)。ドメイン層は `RouteTracking.swift` (追従判定) + `GuidanceNarration.swift` (発話とリルートの判断)、UI 層は `GuidanceSession` (追従と発話の配線) + `RouteEngine` (グラフを保持してリルートを 3 秒に収める) + `RegionCacheCoordinator.beginGuidance/endGuidance` (案内フェーズ中だけ連続測位)。残:
    - **実機確認 (最重要)**。`make app-test` は CI で走らないうえ、測位・発話・地図追従はシミュレータでは評価しきれない。とくに (a) 案内フェーズを抜けたときに連続測位が本当に止まっているか (設定 > プライバシー > 位置情報サービスの矢印表示、Xcode の Energy Log)、(b) 到達検知で案内が正しく閉じるか、(c) 逸脱 → リルートが 3 秒以内か

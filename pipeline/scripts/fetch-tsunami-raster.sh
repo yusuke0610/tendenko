@@ -74,6 +74,13 @@ if [ "${1:-}" = "--fetch-one" ]; then
       echo "FAIL $z $x $y"
       exit 0
     fi
+    # 200 でも画像として読めない応答 (メンテナンス中の HTML など) はキャッシュしない。
+    # キャッシュすると再実行でも再取得されず、normalize 側で原因と違うエラーになる。
+    if ! GDAL_PAM_ENABLED=NO gdalinfo "$tmp" >/dev/null 2>&1; then
+      rm -f "$tmp"
+      echo "FAIL $z $x $y"
+      exit 0
+    fi
     mv "$tmp" "$png"
   fi
 

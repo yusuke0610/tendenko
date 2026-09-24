@@ -10,7 +10,7 @@
 #   - zip 内のディレクトリ名が Shift-JIS で、unzip がエンコーディングを解釈できず
 #     ディレクトリ作成に失敗する。unzip -j (junk paths) で階層を落として回避する
 #   - 10m メッシュの浸水深ポリゴン (72,806 件) を、A40 と同様に ST_Union で 1 つの
-#     MultiPolygon に統合し simplify 0.00003度 (≈3m) で単純化する。boolean 判定にしか
+#     MultiPolygon に統合し ≈3m で単純化する (A40 の 0.00003度 相当)。boolean 判定にしか
 #     使わないため浸水深属性は捨てる
 #
 # 取得元 (公式ページで実 URL を確認、CC BY 4.0):
@@ -41,8 +41,11 @@ layer=$(basename "$shp" .shp)
 echo "normalize: fukui ($layer)"
 
 # .prj が無いので -s_srs で第6系 (EPSG:6674) を明示する。
+# -simplify は再投影 (-t_srs) の前に入力 SRS の単位で効く。第6系は m 単位 (縮尺係数 ≈1) なので、
+# A40 の 0.00003度 (≈3m) に揃えるには 3 (m) を指定する (度の値をそのまま渡すと 0.03mm になり
+# 単純化がほぼ効かない)。
 # attribution 列で出典 (福井県, CC BY 4.0) を埋め込む (帰属表示、ADR-0002)。
-ogr2ogr -f GeoJSON -s_srs EPSG:6674 -t_srs EPSG:4326 -makevalid -simplify 0.00003 \
+ogr2ogr -f GeoJSON -s_srs EPSG:6674 -t_srs EPSG:4326 -makevalid -simplify 3 \
   -lco COORDINATE_PRECISION=6 \
   data/fukui/fukui.dissolved.geojson "$shp" \
   -dialect sqlite -sql "SELECT ST_Union(geometry) AS geometry, '福井県' AS attribution FROM \"$layer\""
